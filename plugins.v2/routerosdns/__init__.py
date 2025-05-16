@@ -24,7 +24,7 @@ class RouterOSDNS(_PluginBase):
     # 插件描述
     plugin_desc = "定时将本地Hosts同步至 RouterOS 的 DNS Static 中。"
     # 插件版本
-    plugin_version = "1.0"
+    plugin_version = "1.1"
     # 插件作者
     plugin_author = "Aqr-K"
     # 插件图标
@@ -48,6 +48,8 @@ class RouterOSDNS(_PluginBase):
     _notify: bool = False
     # 发送通知类型
     _msg_type = "Plugin"
+    # 是否启用定时器
+    _cron_enabled = True
     # 任务执行间隔
     _cron: str = "0 6 * * *"
     # 路由器地址
@@ -70,7 +72,7 @@ class RouterOSDNS(_PluginBase):
     _ignore: str = None
 
     # 定时器
-    _scheduler = None
+    _scheduler = BackgroundScheduler(timezone=settings.TZ)
     # 退出事件
     _event = threading.Event()
 
@@ -81,6 +83,7 @@ class RouterOSDNS(_PluginBase):
         self._enabled = config.get("enabled", False)
         self._onlyonce = config.get("onlyonce", False)
         self._del_dns = config.get("del_dns", False)
+        self._cron_enabled = config.get("cron_enabled", True)
         self._cron = config.get("cron", "0 6 * * *")
         self._notify = config.get("notify")
         self._msg_type = config.get("msg_type")
@@ -105,25 +108,11 @@ class RouterOSDNS(_PluginBase):
             self.__update_config()
 
         else:
-            # 启动服务
-            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-
             if self._onlyonce:
-                logger.info(f"{self.plugin_name}服务，立即运行一次")
-                self._scheduler.add_job(
-                    func=self.add_or_update_remote_dns_from_local_hosts,
-                    trigger="date",
-                    run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-                    name=f"{self.plugin_name}",
-                )
+                self.add_or_update_remote_dns_from_local_hosts()
                 # 关闭一次性开关
                 self._onlyonce = False
                 self.__update_config()
-
-            # 启动服务
-            if self._scheduler.get_jobs():
-                self._scheduler.print_jobs()
-                self._scheduler.start()
 
     def get_state(self) -> bool:
         return self._enabled
@@ -134,6 +123,29 @@ class RouterOSDNS(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
+
+    def get_actions(self) -> List[Dict[str, Any]]:
+        """
+        获取插件工作流动作
+        [{
+            "id": "动作ID",
+            "name": "动作名称",
+            "func": self.xxx,
+            "kwargs": {} # 需要附加传递的参数
+        }]
+        """
+        return [
+            # {
+            #     "id": "delete",
+            #     "name": "删除本地hosts记录",
+            #     "func": self.delete_action,
+            # },
+            {
+                "id": "add_and_update",
+                "name": "添加/更新hosts到RouterOS DNS Static",
+                "func": self.add_and_update_action,
+            }
+        ]
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -146,7 +158,7 @@ class RouterOSDNS(_PluginBase):
             "kwargs": {} # 定时器参数
         }]
         """
-        if self._enabled and self._cron:
+        if self._enabled and self._cron_enabled and self._cron:
             logger.info(f"{self.plugin_name}定时服务启动，时间间隔 {self._cron} ")
             return [{
                 "id": self.__class__.__name__,
@@ -193,7 +205,7 @@ class RouterOSDNS(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -211,7 +223,25 @@ class RouterOSDNS(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'onlyonce',
+                                            'label': '立即运行一次',
+                                            'hint': '插件将立即运行一次',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -229,7 +259,7 @@ class RouterOSDNS(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -243,24 +273,6 @@ class RouterOSDNS(_PluginBase):
                                             'hint': '选择消息的类型',
                                             'persistent-hint': True,
                                             'active': True,
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'onlyonce',
-                                            'label': '立即运行一次',
-                                            'hint': '插件将立即运行一次',
-                                            'persistent-hint': True
                                         }
                                     }
                                 ]
@@ -288,12 +300,67 @@ class RouterOSDNS(_PluginBase):
                     {
                         'component': 'VRow',
                         'content': [
-
                             {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'cron_enabled',
+                                            'label': '启用定时器',
+                                            'hint': '开启后执行周期才会生效',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cron',
+                                            'label': '执行周期',
+                                            'placeholder': '5位cron表达式',
+                                            'hint': '使用cron表达式指定执行周期，如 0 8 * * *',
+                                            'persistent-hint': True
+                                        },
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'address',
+                                            'label': '路由器地址',
+                                            'placeholder': '192.168.*.* or http(s)://example.com:443',
+                                            'hint': '请输入路由器的地址',
+                                            'persistent-hint': True,
+                                            'clearable': True,
+                                        }
+                                    }
+                                ]
+                            },                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
                                 },
                                 'content': [
                                     {
@@ -315,7 +382,7 @@ class RouterOSDNS(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 3
                                 },
                                 'content': [
                                     {
@@ -329,45 +396,6 @@ class RouterOSDNS(_PluginBase):
                                             'type': 'number',
                                             'min': 120,
                                             'suffix': '秒',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '执行周期',
-                                            'placeholder': '5位cron表达式',
-                                            'hint': '使用cron表达式指定执行周期，如 0 8 * * *',
-                                            'persistent-hint': True
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 12
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'address',
-                                            'label': '路由器地址',
-                                            'placeholder': '192.168.*.* or http(s)://example.com:443',
-                                            'hint': '请输入路由器的地址',
-                                            'persistent-hint': True,
-                                            'clearable': True,
                                         }
                                     }
                                 ]
@@ -511,7 +539,13 @@ class RouterOSDNS(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '注意：可以配合自定义Hosts以及Cloudflare IP优选插件，实现RouterOS路由Cloudflare优选'
+                                            'style': 'white-space: pre-line;',
+                                            'text':
+                                                '使用提示：\n'
+                                                '1、可以配合自定义Hosts以及Cloudflare IP优选插件，实现RouterOS路由Cloudflare优选；\n'
+                                                '2、插件版本：v1.1以后，仅启用插件，只会注册工作流支持，插件并不会自动注册定时任务，需要插件自身支持定时任务的，请启用定时器；\n'
+                                                '3、v2.4.8+版本后，可通过关闭定时器，将定时任务完全交由工作流统一管理，实现无缝联动运行；\n'
+                                                '4、工作流与插件内置的定时执行周期，互相独立，不会互相影响，可同时使用（建议二选一即可）。\n'
                                         }
                                     }
                                 ]
@@ -524,6 +558,7 @@ class RouterOSDNS(_PluginBase):
             "enabled": False,
             "onlyonce": False,
             "del_dns": False,
+            "cron_enabled": True,
             "cron": "0 6 * * *",
             "notify": True,
             "msg_type": "Plugin",
@@ -573,6 +608,28 @@ class RouterOSDNS(_PluginBase):
         except Exception as e:
             logger.error(f"获取RouterOS地址失败: {e}")
             return None
+
+    def add_and_update_action(self) -> bool:
+        """
+        工作流 - 添加/更新
+        """
+        try:
+            self.add_or_update_remote_dns_from_local_hosts()
+        except Exception as e:
+            logger.error(f"工作流调用：添加/更新操作失败: {e}")
+            return False
+        return True
+
+    def delete_action(self) -> bool:
+        """
+        工作流 - 删除
+        """
+        try:
+            self.delete_local_hosts_from_remote_dns()
+        except Exception as e:
+            logger.error(f"工作流调用：添加/更新操作失败: {e}")
+            return False
+        return True
 
     def add_or_update_remote_dns_from_local_hosts(self) -> bool:
         """
@@ -661,7 +718,10 @@ class RouterOSDNS(_PluginBase):
                         add_error += 1
 
             # 开始汇报结果
-            text = f"本次同步结果：应新增 {int(add_success) + int(add_error)} 项记录，成功 {int(add_success)} 项，失败 {int(add_error)} 项；应更新 {int(update_success) + int(update_error)} 项记录，成功 {int(update_success)} 项，失败 {int(update_error)} 项。"
+            text = (f"本次同步结果：应新增 {int(add_success) + int(add_error)} 项记录，"
+                    f"成功 {int(add_success)} 项，失败 {int(add_error)} 项；"
+                    f"应更新 {int(update_success) + int(update_error)} 项记录，"
+                    f"成功 {int(update_success)} 项，失败 {int(update_error)} 项。")
             logger.info(text)
             self.__send_message(title="【RouterOS路由DNS Static更新】", text=text)
 
@@ -882,16 +942,19 @@ class RouterOSDNS(_PluginBase):
             logger.error(f"判断 {ip} 类型错误：{e}")
         return False, None
 
-    def __send_message(self, title: str, text: str):
+    def __send_message(self, title: str, text: str) -> bool:
         """
         发送消息
         """
         if not self._notify:
-            return
-
-        self.post_message(mtype=getattr(NotificationType, self._msg_type, NotificationType.Plugin.value),
-                          title=title,
-                          text=text)
+            return False
+        try:
+            self.post_message(mtype=getattr(NotificationType, self._msg_type, NotificationType.Plugin.value),
+                              title=title,
+                              text=text)
+        except Exception as e:
+            logger.error(f"发送消息失败: {e}")
+            return False
 
     def __build_record_data(self, record_address: str, record_name: str, ip_version: int, record_id: str = None,
                             record_data: dict = None) -> dict:
@@ -1038,6 +1101,7 @@ class RouterOSDNS(_PluginBase):
             "enabled": self._enabled,
             "onlyonce": self._onlyonce,
             "del_dns": self._del_dns,
+            "cron_enabled": self._cron_enabled,
             "cron": self._cron,
             "notify": self._notify,
             "msg_type": self._msg_type,
