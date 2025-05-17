@@ -1,16 +1,15 @@
 import ipaddress
 import threading
-from datetime import datetime, timedelta
 from typing import Any, List, Dict, Tuple, Optional
 
-import pytz
 from requests import Response, auth
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.core.config import settings
+from app.core.event import eventmanager, Event
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import NotificationType
+from app.schemas.types import NotificationType, EventType
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
 from app.utils.url import UrlUtils
@@ -24,7 +23,7 @@ class RouterOSDNS(_PluginBase):
     # 插件描述
     plugin_desc = "定时将本地Hosts同步至 RouterOS 的 DNS Static 中。"
     # 插件版本
-    plugin_version = "1.1"
+    plugin_version = "1.2"
     # 插件作者
     plugin_author = "Aqr-K"
     # 插件图标
@@ -119,10 +118,46 @@ class RouterOSDNS(_PluginBase):
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        pass
+        """
+        定义远程控制命令
+        :return: 命令关键字、事件、描述、附带数据
+        """
+        return [
+            {
+                "cmd": "/sync_ros_dns_from_hosts",
+                "event": EventType.PluginAction,
+                "desc": "同步本地hosts到RouterOS DNS Static",
+                "data": {
+                    "action": "sync_hosts_to_ros_dns"
+                }
+            },
+            # {
+            #     "cmd": "/delete_hosts_from_ros_dns",
+            #     "event": EventType.PluginAction,
+            #     "desc": "删除存在于当前Hosts中的RouterOS DNS Static",
+            #     "data": {
+            #         "action": "delete_hosts_from_ros_dns"
+            #     }
+            # }
+        ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        pass
+        return [
+            {
+                "path": "/sync_ros_dns_from_hosts",
+                "endpoint": self.add_or_update_remote_dns_from_local_hosts(),
+                "methods": ["GET"],
+                "summary": "同步本地hosts到RouterOS DNS Static",
+                "description": "同步本地hosts到RouterOS DNS Static",
+            },
+            # {
+            #     "path": "/delete_hosts_from_ros_dns",
+            #     "endpoint": self.delete_local_hosts_from_remote_dns(),
+            #     "methods": ["GET"],
+            #     "summary": "删除存在于当前Hosts中的RouterOS DNS Static",
+            #     "description": "删除存在于当前Hosts中的RouterOS DNS Static",
+            # }
+        ]
 
     def get_actions(self) -> List[Dict[str, Any]]:
         """
@@ -356,7 +391,8 @@ class RouterOSDNS(_PluginBase):
                                         }
                                     }
                                 ]
-                            },                            {
+                            },
+                            {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
@@ -630,6 +666,46 @@ class RouterOSDNS(_PluginBase):
             logger.error(f"工作流调用：添加/更新操作失败: {e}")
             return False
         return True
+
+    @eventmanager.register(EventType.PluginAction)
+    def add_and_update_command(self, event: Event = None) -> bool:
+        """
+        命令 - 添加/更新
+        """
+        if not event:
+            return False
+        else:
+            event_data = event.event_data
+            if not event_data or event_data.get("action") != "sync_hosts_to_ros_dns":
+                return False
+            try:
+                logger.info(f"收到命令，开始 同步本地hosts到RouterOS DNS Static")
+                self.add_or_update_remote_dns_from_local_hosts()
+                logger.info(f"命令调用：添加/更新操作成功")
+            except Exception as e:
+                logger.error(f"命令调用：添加/更新操作失败: {e}")
+                return False
+            return True
+
+    @eventmanager.register(EventType.PluginAction)
+    def delete_command(self, event: Event = None) -> bool:
+        """
+        命令 - 删除
+        """
+        if not event:
+            return False
+        else:
+            event_data = event.event_data
+            if not event_data or event_data.get("action") != "delete_hosts_from_ros_dns":
+                return False
+            try:
+                logger.info(f"收到命令，开始 删除存在于当前Hosts中的RouterOS DNS Static")
+                self.delete_local_hosts_from_remote_dns()
+                logger.info(f"命令调用：删除操作成功")
+            except Exception as e:
+                logger.error(f"命令调用：删除操作失败: {e}")
+                return False
+            return True
 
     def add_or_update_remote_dns_from_local_hosts(self) -> bool:
         """
