@@ -70,7 +70,7 @@ jobs:
             local PLUGIN_NAME=$(jq -r --arg id "$PLUGIN_ID" '.[$id].name' "$PACKAGE_FILE")
             local RELEASE_NOTES=$(jq -r --arg id "$PLUGIN_ID" --arg ver "v$VERSION" '.[$id].history[$ver]' "$PACKAGE_FILE")
             local TAG_NAME="${LOWERCASE_ID}_${VERSION}"
-            local ARCHIVE_BASE_NAME="${PLUGIN_ID}.v${VERSION}"
+            local ARCHIVE_BASE_NAME="${PLUGIN_ID}_v${VERSION}"
 
             local PLUGIN_JSON=$(jq -n \
               --arg id "$PLUGIN_ID" \
@@ -193,30 +193,49 @@ jobs:
           sha256sum "${{ matrix.plugin.archive_base }}.tar.gz" > "${{ matrix.plugin.archive_base }}.tar.gz.sha256"
 
       # 检查并删除同名的 tag 和 release
-      - name: 检查并覆盖已存在的 Release 和 Tag
+      - name: 处理已存在的 Release 和 Tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG_NAME="${{ matrix.plugin.tag_name }}"
-          echo "[Info] 准备处理标签: $TAG_NAME"
 
-          # 1. 检查并处理 GitHub Release
-          # 使用 gh release view 检查是否存在。>/dev/null 2>&1 用于抑制其自身的输出。
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "[Warn] 发现已存在的 Release: $TAG_NAME。将被覆盖，正在删除..."
-            gh release delete "$TAG_NAME" --yes
-          else
-            echo "[Info] 未发现已存在的 Release，将直接创建。"
-          fi
+          # 手动模式：允许覆盖
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "[Info] 手动模式：允许覆盖已存在的发布。"
+            # 检查并处理 GitHub Release
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              echo "[Warn] 发现已存在的 Release: $TAG_NAME。将被覆盖，正在删除..."
+              gh release delete "$TAG_NAME" --yes
+            else
+              echo "[Info] 未发现已存在的 Release，将直接创建。"
+            fi
 
-          # 2. 检查并处理远程 Git Tag
-          # `git ls-remote` 会在找到 tag 时返回非空字符串。
-          if [ -n "$(git ls-remote --tags origin "$TAG_NAME")" ]; then
-            echo "[Warn] 发现已存在的远程 Git Tag: $TAG_NAME。将被覆盖，正在删除..."
-            git push origin --delete "$TAG_NAME"
+            # 检查并处理远程 Git Tag
+            if [ -n "$(git ls-remote --tags origin "$TAG_NAME")" ]; then
+              echo "[Warn] 发现已存在的远程 Git Tag: $TAG_NAME。将被覆盖，正在删除..."
+              git push origin --delete "$TAG_NAME"
+            else
+              echo "[Info] 未发现已存在的远程 Git Tag，将直接创建。"
+            fi
+
+          # 自动模式：禁止覆盖
           else
-            echo "[Info] 未发现已存在的远程 Git Tag，将直接创建。"
+            echo "[Info] 自动模式：检查是否存在冲突的发布。"
+
+            # 检查 Release 是否存在，如果存在则报错退出
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              echo "[Fatal] 自动模式失败：Release with tag '$TAG_NAME' 已存在。请手动删除或更新版本号。"
+              exit 1
+            fi
+
+            # 检查 Git Tag 是否存在，如果存在则报错退出
+            if [ -n "$(git ls-remote --tags origin "$TAG_NAME")" ]; then
+              echo "[Fatal] 自动模式失败：Git Tag '$TAG_NAME' 已存在。请手动删除或更新版本号。"
+              exit 1
+            fi
+
+            echo "[Info] 检查通过，不存在同名 Release 或 Tag，可以安全发布。"
           fi
 
       # 创建 GitHub Release
