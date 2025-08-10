@@ -7,7 +7,7 @@
         "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Routeros_A.png",
         "author": "Aqr-K",
         "v2": true,
-        "release": true
+        "release": true,
         "level": 1,
         "history": {
             "v1.2": "增加：机器人命令调用，api接口调用。",
