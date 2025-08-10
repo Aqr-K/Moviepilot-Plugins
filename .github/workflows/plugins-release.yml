@@ -1,0 +1,205 @@
+name: Build and Release Plugins
+
+# 当手动触发时，可以自定义运行名称，方便识别
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Manual Release for {0}', github.event.inputs.plugin_id) || format('Auto Release triggered by {0}', github.triggering_actor) }}
+
+on:
+  # 1. 手动触发器
+  workflow_dispatch:
+    inputs:
+      # 让用户选择插件的源目录
+      source_directory:
+        description: '请选择插件源码所在的根目录'
+        required: true
+        type: choice
+        options:
+          - plugins
+          - plugins.v2
+          - plugins.v3
+        default: 'plugins.v2'
+      # 手动输入要打包的插件ID
+      plugin_id:
+        description: '请输入 package.json 中的插件 ID (例如: AutoSignIn)'
+        required: true
+        type: string
+      # 是否为预发布版本
+      prerelease:
+        description: '是否为预发布版本？'
+        required: false
+        type: boolean
+        default: false
+
+  # 2. 自动触发器：当 main 分支的指定文件发生 push 时
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+      - 'package.v2.json'
+      - 'package.v3.json'
+
+jobs:
+  # 检测需要发布的插件
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detector.outputs.plugins }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 安装 jq 和 zip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zip
+
+      # 检测更新的插件
+      - name: Detect updated plugins and generate metadata
+        id: detector
+        run: |
+          PLUGINS_TO_RELEASE="[]"
+
+          add_to_matrix() {
+            local PLUGIN_ID="$1"
+            local VERSION="$2"
+            local SOURCE_DIR="$3"
+            local PACKAGE_FILE="$4"
+            
+            # 提取基础信息
+            local LOWERCASE_ID=$(echo "$PLUGIN_ID" | tr '[:upper:]' '[:lower:]')
+            local PLUGIN_NAME=$(jq -r --arg id "$PLUGIN_ID" '.[$id].name' "$PACKAGE_FILE")
+            # Release Body: history 下带v版本的值
+            local RELEASE_NOTES=$(jq -r --arg id "$PLUGIN_ID" --arg ver "v$VERSION" '.[$id].history[$ver]' "$PACKAGE_FILE")
+            
+            # Tag Name: 小写id_版本号 (cctvdiscover_1.2.1)
+            local TAG_NAME="${LOWERCASE_ID}_${VERSION}"
+            # Archive Base Name: 大写id.带v版本号
+            local ARCHIVE_BASE_NAME="${PLUGIN_ID}.v${VERSION}"
+            # ------------------------------------
+
+            # 构建一个完全符合您要求的JSON对象
+            local PLUGIN_JSON=$(jq -n \
+              --arg id "$PLUGIN_ID" \
+              --arg version "$VERSION" \
+              --arg name "$PLUGIN_NAME" \
+              --arg notes "$RELEASE_NOTES" \
+              --arg tag_name "$TAG_NAME" \
+              --arg archive_base "$ARCHIVE_BASE_NAME" \
+              --arg source_path "${SOURCE_DIR}/${LOWERCASE_ID}" \
+              '{id: $id, version: $version, name: $name, notes: $notes, tag_name: $tag_name, archive_base: $archive_base, source_path: $source_path}')
+            
+            PLUGINS_TO_RELEASE=$(echo "$PLUGINS_TO_RELEASE" | jq --argjson item "$PLUGIN_JSON" '. + [$item]')
+          }
+
+          # 手动触发
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "[WorkflowDispatch] 检测单个插件"
+            MANUAL_PLUGIN_ID="${{ inputs.plugin_id }}"
+            MANUAL_SOURCE_DIR="${{ inputs.source_directory }}"
+            # 确定要去读取 package(.v2/.v3).json
+            PACKAGE_FILE_NAME="package.json"
+            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v2" ]]; then PACKAGE_FILE_NAME="package.v2.json"; fi
+            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v3" ]]; then PACKAGE_FILE_NAME="package.v3.json"; fi
+
+            # 检查 package 文件是否存在
+            if [ ! -f "$PACKAGE_FILE_NAME" ]; then
+              echo "[Error] 未找到包装文件: $PACKAGE_FILE_NAME"; 
+              exit 1; 
+            fi
+            # 提取版本
+            VERSION=$(jq -r --arg id "$MANUAL_PLUGIN_ID" '.[$id].version // "null"' "$PACKAGE_FILE_NAME")
+            if [ "$VERSION" == "null" ]; then 
+              echo "[Error] 插件ID '${MANUAL_PLUGIN_ID}' 未找到。"; 
+              exit 1; 
+            fi
+
+            # 检查 release 标志
+            IS_RELEASABLE=$(jq -r --arg id "$MANUAL_PLUGIN_ID" '.[$id].release // false' "$PACKAGE_FILE_NAME")
+            if [ "$IS_RELEASABLE" != "true" ]; then
+              echo "::error::Plugin '${MANUAL_PLUGIN_ID}' is not marked for release (release key is not set to true)."
+              exit 1 # 直接退出，不继续执行
+            fi
+
+            add_to_matrix "$MANUAL_PLUGIN_ID" "$VERSION" "$MANUAL_SOURCE_DIR" "$PACKAGE_FILE_NAME"
+
+          # 自动更新
+          elif [ "${{ github.event_name }}" == "push" ]; then
+            echo "[Push] 比较版本"
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+            for PACKAGE_FILE in package.json package.v2.json package.v3.json; do
+              if echo "$CHANGED_FILES" | grep -q "^${PACKAGE_FILE}$"; then
+                git show "${{ github.event.before }}:${PACKAGE_FILE}" > old.json
+                SOURCE_DIR="plugins"
+                if [[ "$PACKAGE_FILE" == "package.v2.json" ]]; then 
+                  SOURCE_DIR="plugins.v2"; 
+                fi
+                if [[ "$PACKAGE_FILE" == "package.v3.json" ]]; then 
+                  SOURCE_DIR="plugins.v3"; 
+                fi
+                for PLUGIN_ID in $(jq -r 'keys[]' "$PACKAGE_FILE"); do
+                  OLD_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' old.json)
+                  NEW_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' "$PACKAGE_FILE")
+                  # 检查 release 标志
+                  IS_RELEASABLE=$(jq -r --arg id "$PLUGIN_ID" '.[$id].release // false' "$PACKAGE_FILE")
+                  # 检查插件是否可发布
+                  if [ "$OLD_VERSION" != "$NEW_VERSION" ] && [ "$NEW_VERSION" != "null" ] && [ "$IS_RELEASABLE" == "true" ]; then
+                    add_to_matrix "$PLUGIN_ID" "$NEW_VERSION" "$SOURCE_DIR" "$PACKAGE_FILE"
+                  fi
+                done
+              fi
+            done
+          fi
+
+          echo "--- 要释放的插件（元数据） ---"
+          echo "$PLUGINS_TO_RELEASE" | jq .
+          echo "plugins=$(echo "$PLUGINS_TO_RELEASE" | jq -c .)" >> $GITHUB_OUTPUT
+
+  # 根据检测结果，构建并发布
+  build-and-release:
+    # 依赖 Job 1
+    needs: detect-changes
+    # 仅当 Job 1 的输出矩阵不为空时，才运行此 Job
+    if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    # 使用 strategy: matrix 来为每个需要发布的插件创建一个并行的任务
+    strategy:
+      matrix:
+        # fromJson 函数会将 Job 1 输出的 JSON 字符串转换回 JSON 对象
+        plugin: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package plugin source code
+        run: |
+          # 检查源码目录是否存在
+          if [ ! -d "${{ matrix.plugin.source_path }}" ]; then
+            echo "[错误] 未找到源目录: ${{ matrix.plugin.source_path }}"
+            exit 1
+          fi
+          # 打包成 zip 和 tar.gz
+          zip -r "${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.source_path }}"
+          tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" "${{ matrix.plugin.source_path }}"
+
+      # 创建 GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Release 的标签名
+          tag_name: ${{ matrix.plugin.tag_name }}
+          # Release 的标题
+          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }}
+          # Release 的内容
+          body: ${{ matrix.plugin.notes }}
+          # 将打包好的文件作为附件
+          files: |
+            ${{ matrix.plugin.archive_base }}.zip
+            ${{ matrix.plugin.archive_base }}.tar.gz
+          prerelease: ${{ inputs.prerelease }}
