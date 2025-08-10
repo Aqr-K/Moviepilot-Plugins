@@ -59,6 +59,8 @@ jobs:
       - name: Detect updated plugins and generate metadata
         id: detector
         run: |
+          set -euo pipefail
+          
           PLUGINS_TO_RELEASE="[]"
 
           add_to_matrix() {
@@ -92,14 +94,12 @@ jobs:
             MANUAL_PLUGIN_ID="${{ inputs.plugin_id }}"
             MANUAL_SOURCE_DIR="${{ inputs.source_directory }}"
             
-            # --- START: 自动化逻辑修改 ---
             # 从源目录自动推导 package 文件名
             # 例如: 'plugins.v2' -> '.v2', 'plugins' -> ''
             SUFFIX=${MANUAL_SOURCE_DIR#plugins}
             # 例如: 'package' + '.v2' + '.json' -> 'package.v2.json'
             PACKAGE_FILE_NAME="package${SUFFIX}.json"
             echo "[Info] 自动推断的 Package 文件: ${PACKAGE_FILE_NAME}"
-            # --- END: 自动化逻辑修改 ---
 
             if [ ! -f "$PACKAGE_FILE_NAME" ]; then 
               echo "[Error] 未找到包装文件: $PACKAGE_FILE_NAME"; 
