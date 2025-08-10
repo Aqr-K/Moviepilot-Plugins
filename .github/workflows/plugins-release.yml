@@ -68,19 +68,12 @@ jobs:
             local SOURCE_DIR="$3"
             local PACKAGE_FILE="$4"
             
-            # 提取基础信息
             local LOWERCASE_ID=$(echo "$PLUGIN_ID" | tr '[:upper:]' '[:lower:]')
             local PLUGIN_NAME=$(jq -r --arg id "$PLUGIN_ID" '.[$id].name' "$PACKAGE_FILE")
-            # Release Body: history 下带v版本的值
             local RELEASE_NOTES=$(jq -r --arg id "$PLUGIN_ID" --arg ver "v$VERSION" '.[$id].history[$ver]' "$PACKAGE_FILE")
-            
-            # Tag Name: 小写id_版本号 (cctvdiscover_1.2.1)
             local TAG_NAME="${LOWERCASE_ID}_${VERSION}"
-            # Archive Base Name: 大写id.带v版本号
             local ARCHIVE_BASE_NAME="${PLUGIN_ID}.v${VERSION}"
-            # ------------------------------------
 
-            # 构建一个完全符合您要求的JSON对象
             local PLUGIN_JSON=$(jq -n \
               --arg id "$PLUGIN_ID" \
               --arg version "$VERSION" \
@@ -99,69 +92,61 @@ jobs:
             echo "[WorkflowDispatch] 检测单个插件"
             MANUAL_PLUGIN_ID="${{ inputs.plugin_id }}"
             MANUAL_SOURCE_DIR="${{ inputs.source_directory }}"
-            # 确定要去读取 package(.v2/.v3).json
-            PACKAGE_FILE_NAME="package.json"
-            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v2" ]]; then 
-              PACKAGE_FILE_NAME="package.v2.json"; 
-              fi
-            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v3" ]]; then 
-              PACKAGE_FILE_NAME="package.v3.json"; 
-            fi
+            
+            # --- START: 自动化逻辑修改 ---
+            # 从源目录自动推导 package 文件名
+            # 例如: 'plugins.v2' -> '.v2', 'plugins' -> ''
+            SUFFIX=${MANUAL_SOURCE_DIR#plugins}
+            # 例如: 'package' + '.v2' + '.json' -> 'package.v2.json'
+            PACKAGE_FILE_NAME="package${SUFFIX}.json"
+            echo "[Info] 自动推断的 Package 文件: ${PACKAGE_FILE_NAME}"
+            # --- END: 自动化逻辑修改 ---
 
-            # 检查 package 文件是否存在
-            if [ ! -f "$PACKAGE_FILE_NAME" ]; then
+            if [ ! -f "$PACKAGE_FILE_NAME" ]; then 
               echo "[Error] 未找到包装文件: $PACKAGE_FILE_NAME"; 
               exit 1; 
             fi
-            # 提取版本
             VERSION=$(jq -r --arg id "$MANUAL_PLUGIN_ID" '.[$id].version // "null"' "$PACKAGE_FILE_NAME")
             if [ "$VERSION" == "null" ]; then 
               echo "[Error] 插件ID '${MANUAL_PLUGIN_ID}' 未找到。"; 
               exit 1; 
             fi
-
-            # 检查 release 标志
             IS_RELEASABLE=$(jq -r --arg id "$MANUAL_PLUGIN_ID" '.[$id].release // false' "$PACKAGE_FILE_NAME")
             if [ "$IS_RELEASABLE" != "true" ]; then
-              echo "::error::Plugin '${MANUAL_PLUGIN_ID}' is not marked for release (release key is not set to true)."
-              exit 1 # 直接退出，不继续执行
+              echo "[Error] 插件 '${MANUAL_PLUGIN_ID}' 没有 release 标记 （release 未设置为 true）。"
+              exit 1
             fi
-
             add_to_matrix "$MANUAL_PLUGIN_ID" "$VERSION" "$MANUAL_SOURCE_DIR" "$PACKAGE_FILE_NAME"
 
           # 自动更新
           elif [ "${{ github.event_name }}" == "push" ]; then
             echo "[Push] 比较版本"
-            # 获取在本次 push 中被修改的文件列表
             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
             for PACKAGE_FILE in package.json package.v2.json package.v3.json; do
-              # 检查 package 文件是否在变更列表中
               if echo "$CHANGED_FILES" | grep -q "^${PACKAGE_FILE}$"; then
-                echo "检测到文件变更: ${PACKAGE_FILE}"
+                echo "[Info] 检测到文件变更: ${PACKAGE_FILE}"
                 
-                # 尝试获取旧文件，如果不存在（说明是新文件），则创建一个空的json对象
                 if ! git show "${{ github.event.before }}:${PACKAGE_FILE}" > old.json 2>/dev/null; then
                   echo "文件 ${PACKAGE_FILE} 在上一个 commit 中不存在，认定为新文件。"
                   echo "{}" > old.json
                 fi
 
-                SOURCE_DIR="plugins"
-                if [[ "$PACKAGE_FILE" == "package.v2.json" ]]; then 
-                  SOURCE_DIR="plugins.v2"; 
-                fi
-                if [[ "$PACKAGE_FILE" == "package.v3.json" ]]; then 
-                  SOURCE_DIR="plugins.v3"; 
-                fi
+                # 从 package 文件名自动推导源目录
+                # 例如: 'package.v2.json' -> '.v2.json' -> '.v2'
+                TEMP_SUFFIX=${PACKAGE_FILE#package}
+                SUFFIX=${TEMP_SUFFIX%.json}
 
-                # 遍历当前 package 文件中的所有插件 ID
+                # 例如: 'plugins' + '.v2' -> 'plugins.v2'
+                SOURCE_DIR="plugins${SUFFIX}"
+                echo "[Info] 自动推断的源目录: ${SOURCE_DIR}"
+
                 for PLUGIN_ID in $(jq -r 'keys[]' "$PACKAGE_FILE"); do
                   OLD_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' old.json)
                   NEW_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' "$PACKAGE_FILE")
                   IS_RELEASABLE=$(jq -r --arg id "$PLUGIN_ID" '.[$id].release // false' "$PACKAGE_FILE")
                   
-                  # 如果版本号发生变化，且新版本号不为null，且标记为可发布，则添加到发布矩阵
                   if [ "$OLD_VERSION" != "$NEW_VERSION" ] && [ "$NEW_VERSION" != "null" ] && [ "$IS_RELEASABLE" == "true" ]; then
-                    echo "发现更新的插件: ${PLUGIN_ID}, 版本: ${OLD_VERSION} -> ${NEW_VERSION}"
+                    echo "[Info] 发现更新的插件: ${PLUGIN_ID}, 版本: ${OLD_VERSION} -> ${NEW_VERSION}"
                     add_to_matrix "$PLUGIN_ID" "$NEW_VERSION" "$SOURCE_DIR" "$PACKAGE_FILE"
                   fi
                 done
@@ -175,9 +160,7 @@ jobs:
 
   # 根据检测结果，构建并发布
   build-and-release:
-    # 依赖 Job 1
     needs: detect-changes
-    # 仅当 Job 1 的输出矩阵不为空时，才运行此 Job
     if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
     runs-on: ubuntu-latest
     permissions:
@@ -197,12 +180,27 @@ jobs:
         run: |
           # 检查源码目录是否存在
           if [ ! -d "${{ matrix.plugin.source_path }}" ]; then
-            echo "[错误] 未找到源目录: ${{ matrix.plugin.source_path }}"
+            echo "[Error] 未找到源目录: ${{ matrix.plugin.source_path }}"
             exit 1
           fi
           # 打包成 zip 和 tar.gz
           zip -r "${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.source_path }}"
           tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" "${{ matrix.plugin.source_path }}"
+
+      # 检查并删除同名的 tag 和 release
+      - name: Delete existing tag and release
+        env:
+          # 需要 GITHUB_TOKEN 才能使用 gh cli
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ matrix.plugin.tag_name }}"
+          echo "[Info] 检查标签是否存在: $TAG_NAME"
+
+          # 检查并删除 Release
+          gh release delete "$TAG_NAME" --yes
+
+          # 检查并删除 Git Tag
+          git push origin --delete "$TAG_NAME"
 
       # 创建 GitHub Release
       - name: Create GitHub Release
@@ -218,4 +216,4 @@ jobs:
           files: |
             ${{ matrix.plugin.archive_base }}.zip
             ${{ matrix.plugin.archive_base }}.tar.gz
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
