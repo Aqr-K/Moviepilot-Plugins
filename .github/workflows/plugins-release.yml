@@ -69,8 +69,8 @@ jobs:
             local LOWERCASE_ID=$(echo "$PLUGIN_ID" | tr '[:upper:]' '[:lower:]')
             local PLUGIN_NAME=$(jq -r --arg id "$PLUGIN_ID" '.[$id].name' "$PACKAGE_FILE")
             local RELEASE_NOTES=$(jq -r --arg id "$PLUGIN_ID" --arg ver "v$VERSION" '.[$id].history[$ver]' "$PACKAGE_FILE")
-            local TAG_NAME="${LOWERCASE_ID}_${VERSION}"
-            local ARCHIVE_BASE_NAME="${PLUGIN_ID}_v${VERSION}"
+            local TAG_NAME="${PLUGIN_ID}_v${VERSION}"
+            local ARCHIVE_BASE_NAME="${LOWERCASE_ID}_v${VERSION}"
 
             local PLUGIN_JSON=$(jq -n \
               --arg id "$PLUGIN_ID" \
@@ -174,8 +174,7 @@ jobs:
 
   # 开始构建和发布
   build-and-release:
-    needs: start-release-jobs
-    # if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
+    needs: [start-release-jobs, detect-changes]
     name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && ' (Prerelease)' || '' }}
     runs-on: ubuntu-latest
     permissions:
