@@ -49,10 +49,10 @@ jobs:
           fetch-depth: 0
 
       # 安装 jq 和 zip
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq zip
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y python3 git
 
       # 使用Python脚本检测要发布的插件
       - name: Detect plugins to release using Python script
