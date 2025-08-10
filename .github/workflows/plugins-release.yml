@@ -204,7 +204,7 @@ jobs:
           sha256sum "${{ matrix.plugin.archive_base }}.tar.gz" > "${{ matrix.plugin.archive_base }}.tar.gz.sha256"
 
       # 检查并删除同名的 tag 和 release
-      - name: 处理已存在的 Release 和 Tag
+      - name: Check and delete existing tag and release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
