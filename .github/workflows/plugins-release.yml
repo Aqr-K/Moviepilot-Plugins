@@ -1,8 +1,7 @@
 name: Build and Release Plugins
 
 # 当手动触发时，可以自定义运行名称，方便识别
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('Manual Release for: {0}', github.event.inputs.plugin_id) || format('Auto Release from Push: {0}', github.event.head_commit.message) }}
-
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Manual Release for {0}', github.event.inputs.plugin_id) || format('Auto Release triggered by {0}', github.triggering_actor) }}
 on:
   # 1. 手动触发器
   workflow_dispatch:
@@ -162,7 +161,7 @@ jobs:
   build-and-release:
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
-    name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+    name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && '(Pre-release)' || '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -212,7 +211,7 @@ jobs:
           # Release 的标签名
           tag_name: ${{ matrix.plugin.tag_name }}
           # Release 的标题
-          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }}
+          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && '(Prerelease)' || '' }}
           # Release 的内容
           body: ${{ matrix.plugin.notes }}
           # 将打包好的文件作为附件
