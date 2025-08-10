@@ -160,10 +160,22 @@ jobs:
           echo "$PLUGINS_TO_RELEASE" | jq .
           echo "plugins=$(echo "$PLUGINS_TO_RELEASE" | jq -c .)" >> $GITHUB_OUTPUT
 
-  # 根据检测结果，构建并发布
-  build-and-release:
+  # 准备发布任务
+  start-release-jobs:
+    name: Prepare Release
+    runs-on: ubuntu-latest
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
+    steps:
+      - name: Log detected plugins
+        run: |
+          echo "检测到需要发布的插件，将启动构建和发布任务..."
+          echo "插件列表: ${{ needs.detect-changes.outputs.matrix }}"
+
+  # 开始构建和发布
+  build-and-release:
+    needs: start-release-jobs
+    # if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
     name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && ' (Prerelease)' || '' }}
     runs-on: ubuntu-latest
     permissions:
@@ -245,7 +257,7 @@ jobs:
           # Release 的标签名
           tag_name: ${{ matrix.plugin.tag_name }}
           # Release 的标题
-          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }}
+          name: ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && ' (Prerelease)' || '' }}
           # Release 的内容
           body: ${{ matrix.plugin.notes }}
           # 将打包好的文件作为附件
