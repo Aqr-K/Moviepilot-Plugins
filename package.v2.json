@@ -8,7 +8,7 @@
         "author": "Aqr-K",
         "v2": true,
         "release": true,
-        "release_min_ver": "1.2.1"
+        "release_min_ver": "1.2.1",
         "level": 1,
         "history": {
             "v1.2.1": "增加: 支持通过 releases 下载安装。"
