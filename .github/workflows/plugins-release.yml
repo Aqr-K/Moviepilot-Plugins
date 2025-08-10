@@ -132,10 +132,19 @@ jobs:
           # 自动更新
           elif [ "${{ github.event_name }}" == "push" ]; then
             echo "[Push] 比较版本"
+            # 获取在本次 push 中被修改的文件列表
             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
             for PACKAGE_FILE in package.json package.v2.json package.v3.json; do
+              # 检查 package 文件是否在变更列表中
               if echo "$CHANGED_FILES" | grep -q "^${PACKAGE_FILE}$"; then
-                git show "${{ github.event.before }}:${PACKAGE_FILE}" > old.json
+                echo "检测到文件变更: ${PACKAGE_FILE}"
+                
+                # 尝试获取旧文件，如果不存在（说明是新文件），则创建一个空的json对象
+                if ! git show "${{ github.event.before }}:${PACKAGE_FILE}" > old.json 2>/dev/null; then
+                  echo "文件 ${PACKAGE_FILE} 在上一个 commit 中不存在，认定为新文件。"
+                  echo "{}" > old.json
+                fi
+
                 SOURCE_DIR="plugins"
                 if [[ "$PACKAGE_FILE" == "package.v2.json" ]]; then 
                   SOURCE_DIR="plugins.v2"; 
@@ -143,13 +152,16 @@ jobs:
                 if [[ "$PACKAGE_FILE" == "package.v3.json" ]]; then 
                   SOURCE_DIR="plugins.v3"; 
                 fi
+
+                # 遍历当前 package 文件中的所有插件 ID
                 for PLUGIN_ID in $(jq -r 'keys[]' "$PACKAGE_FILE"); do
                   OLD_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' old.json)
                   NEW_VERSION=$(jq -r --arg id "$PLUGIN_ID" '.[$id].version // "null"' "$PACKAGE_FILE")
-                  # 检查 release 标志
                   IS_RELEASABLE=$(jq -r --arg id "$PLUGIN_ID" '.[$id].release // false' "$PACKAGE_FILE")
-                  # 检查插件是否可发布
+                  
+                  # 如果版本号发生变化，且新版本号不为null，且标记为可发布，则添加到发布矩阵
                   if [ "$OLD_VERSION" != "$NEW_VERSION" ] && [ "$NEW_VERSION" != "null" ] && [ "$IS_RELEASABLE" == "true" ]; then
+                    echo "发现更新的插件: ${PLUGIN_ID}, 版本: ${OLD_VERSION} -> ${NEW_VERSION}"
                     add_to_matrix "$PLUGIN_ID" "$NEW_VERSION" "$SOURCE_DIR" "$PACKAGE_FILE"
                   fi
                 done
