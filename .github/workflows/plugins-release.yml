@@ -2,6 +2,7 @@ name: Build and Release Plugins
 
 # 当手动触发时，可以自定义运行名称，方便识别
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Manual Release for {0}', github.event.inputs.plugin_id) || format('Auto Release triggered by {0}', github.triggering_actor) }}
+
 on:
   # 1. 手动触发器
   workflow_dispatch:
@@ -33,9 +34,7 @@ on:
     branches:
       - main
     paths:
-      - 'package.json'
-      - 'package.v2.json'
-      - 'package.v3.json'
+      - 'package*.json'
 
 jobs:
   # 检测需要发布的插件
@@ -59,8 +58,6 @@ jobs:
       - name: Detect updated plugins and generate metadata
         id: detector
         run: |
-          set -euo pipefail
-          
           PLUGINS_TO_RELEASE="[]"
 
           add_to_matrix() {
@@ -121,9 +118,15 @@ jobs:
           elif [ "${{ github.event_name }}" == "push" ]; then
             echo "[Push] 比较版本"
             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
-            for PACKAGE_FILE in package.json package.v2.json package.v3.json; do
-              if echo "$CHANGED_FILES" | grep -q "^${PACKAGE_FILE}$"; then
-                echo "[Info] 检测到文件变更: ${PACKAGE_FILE}"
+            echo "[Info] 检查以下变更的文件:"
+            echo "$CHANGED_FILES"
+
+            # 遍历所有已变更的文件
+            for FILE in $CHANGED_FILES; do
+              # 检查文件名是否符合我们的 package 格式
+              if [[ "$FILE" == package*.json ]]; then
+                PACKAGE_FILE="$FILE"
+                echo "[Info] 检测到相关的 package 文件变更: ${PACKAGE_FILE}"
                 
                 if ! git show "${{ github.event.before }}:${PACKAGE_FILE}" > old.json 2>/dev/null; then
                   echo "文件 ${PACKAGE_FILE} 在上一个 commit 中不存在，认定为新文件。"
@@ -161,7 +164,7 @@ jobs:
   build-and-release:
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
-    name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && '(Pre-release)' || '' }}
+    name: Release ${{ matrix.plugin.name }} v${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && ' (Prerelease)' || '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -190,19 +193,31 @@ jobs:
           sha256sum "${{ matrix.plugin.archive_base }}.tar.gz" > "${{ matrix.plugin.archive_base }}.tar.gz.sha256"
 
       # 检查并删除同名的 tag 和 release
-      - name: Delete existing tag and release
+      - name: 检查并覆盖已存在的 Release 和 Tag
         env:
-          # 需要 GITHUB_TOKEN 才能使用 gh cli
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           TAG_NAME="${{ matrix.plugin.tag_name }}"
-          echo "[Info] 检查标签是否存在: $TAG_NAME"
+          echo "[Info] 准备处理标签: $TAG_NAME"
 
-          # 检查并删除 Release
-          gh release delete "$TAG_NAME" --yes
+          # 1. 检查并处理 GitHub Release
+          # 使用 gh release view 检查是否存在。>/dev/null 2>&1 用于抑制其自身的输出。
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "[Warn] 发现已存在的 Release: $TAG_NAME。将被覆盖，正在删除..."
+            gh release delete "$TAG_NAME" --yes
+          else
+            echo "[Info] 未发现已存在的 Release，将直接创建。"
+          fi
 
-          # 检查并删除 Git Tag
-          git push origin --delete "$TAG_NAME"
+          # 2. 检查并处理远程 Git Tag
+          # `git ls-remote` 会在找到 tag 时返回非空字符串。
+          if [ -n "$(git ls-remote --tags origin "$TAG_NAME")" ]; then
+            echo "[Warn] 发现已存在的远程 Git Tag: $TAG_NAME。将被覆盖，正在删除..."
+            git push origin --delete "$TAG_NAME"
+          else
+            echo "[Info] 未发现已存在的远程 Git Tag，将直接创建。"
+          fi
 
       # 创建 GitHub Release
       - name: Create GitHub Release
@@ -211,7 +226,7 @@ jobs:
           # Release 的标签名
           tag_name: ${{ matrix.plugin.tag_name }}
           # Release 的标题
-          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }} ${{ (github.event_name == 'workflow_dispatch' && inputs.prerelease) && '(Prerelease)' || '' }}
+          name: ${{ matrix.plugin.name }} ${{ matrix.plugin.version }}
           # Release 的内容
           body: ${{ matrix.plugin.notes }}
           # 将打包好的文件作为附件
