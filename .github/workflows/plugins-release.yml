@@ -101,8 +101,12 @@ jobs:
             MANUAL_SOURCE_DIR="${{ inputs.source_directory }}"
             # 确定要去读取 package(.v2/.v3).json
             PACKAGE_FILE_NAME="package.json"
-            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v2" ]]; then PACKAGE_FILE_NAME="package.v2.json"; fi
-            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v3" ]]; then PACKAGE_FILE_NAME="package.v3.json"; fi
+            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v2" ]]; then 
+              PACKAGE_FILE_NAME="package.v2.json"; 
+              fi
+            if [[ "$MANUAL_SOURCE_DIR" == "plugins.v3" ]]; then 
+              PACKAGE_FILE_NAME="package.v3.json"; 
+            fi
 
             # 检查 package 文件是否存在
             if [ ! -f "$PACKAGE_FILE_NAME" ]; then
