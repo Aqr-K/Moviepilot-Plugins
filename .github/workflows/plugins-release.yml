@@ -104,14 +104,36 @@ jobs:
 
       - name: Package plugin source code
         run: |
-          # 检查源码目录是否存在
-          if [ ! -d "${{ matrix.plugin.source_path }}" ]; then
-            echo "[Error] 未找到源目录: ${{ matrix.plugin.source_path }}"
+#          {
+#            "id": "AutoSignIn",
+#            "version": "1.0.0",
+#            "name": "签到",
+#            "notes": "这里是 v1.0.0 版本的更新内容",
+#            "tag_name": "AutoSignIn_v1.0.0",
+#            "archive_base": "autosignin_v1.0.0",
+#            "backend_worker_path": "plugins.v2",
+#            "backend_path": "autosignin",
+#          }
+
+          # 1. 检查插件后端源码是否存在
+          # 通过拼接 backend_worker_path 和 backend_path 来构造完整的源码路径
+          FULL_SOURCE_PATH="${{ matrix.plugin.backend_worker_path }}/${{ matrix.plugin.backend_path }}"
+          
+          if [ ! -d "$FULL_SOURCE_PATH" ]; then
+            echo "[Error] 未找到源目录: $FULL_SOURCE_PATH"
             exit 1
           fi
-          # 打包成 zip 和 tar.gz
-          zip -r "${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.source_path }}"
-          tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" "${{ matrix.plugin.source_path }}"
+
+          echo "打包工作将在 '${{ matrix.plugin.backend_worker_path }}' 目录下进行..."
+          echo "目标插件目录是 '${{ matrix.plugin.backend_path }}'..."
+
+          # 使用 tar 的 -C 参数切换到工作目录，并执行打包操作
+          tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" -C "${{ matrix.plugin.backend_worker_path }}" "${{ matrix.plugin.backend_path }}"
+
+          # 使用 cd 命令切换到工作目录，并使用 zip 命令打包
+          (cd "${{ matrix.plugin.backend_worker_path }}" && zip -r "$GITHUB_WORKSPACE/${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.backend_path }}")
+
+          # 生成校验和文件
           sha256sum "${{ matrix.plugin.archive_base }}.zip" > "${{ matrix.plugin.archive_base }}.zip.sha256"
           sha256sum "${{ matrix.plugin.archive_base }}.tar.gz" > "${{ matrix.plugin.archive_base }}.tar.gz.sha256"
 
