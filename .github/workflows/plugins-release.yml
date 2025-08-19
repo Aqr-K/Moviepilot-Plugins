@@ -104,16 +104,16 @@ jobs:
 
       - name: Package plugin source code
         run: |
-#          {
-#            "id": "AutoSignIn",
-#            "version": "1.0.0",
-#            "name": "签到",
-#            "notes": "这里是 v1.0.0 版本的更新内容",
-#            "tag_name": "AutoSignIn_v1.0.0",
-#            "archive_base": "autosignin_v1.0.0",
-#            "backend_worker_path": "plugins.v2",
-#            "backend_path": "autosignin",
-#          }
+          # {
+          #   "id": "AutoSignIn",
+          #   "version": "1.0.0",
+          #   "name": "签到",
+          #   "notes": "这里是 v1.0.0 版本的更新内容",
+          #   "tag_name": "AutoSignIn_v1.0.0",
+          #   "archive_base": "autosignin_v1.0.0",
+          #   "backend_worker_path": "plugins.v2",
+          #   "backend_path": "autosignin",
+          # }
 
           # 1. 检查插件后端源码是否存在
           # 通过拼接 backend_worker_path 和 backend_path 来构造完整的源码路径
