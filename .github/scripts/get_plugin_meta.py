@@ -37,13 +37,14 @@ def build_plugin_metadata(plugin_id, version, source_dir, package_data, is_prere
     history_key = "prerelease_history" if is_prerelease else "history"
     notes = plugin_info.get(history_key, {}).get(f"v{version}", "")
     return {
-        "id": plugin_id,
-        "version": version,
-        "name": plugin_info.get("name", ""),
-        "notes": notes,
-        "tag_name": f"{plugin_id}_v{version}",
-        "archive_base": f"{lowercase_id}_v{version}",
-        "source_path": f"{source_dir}/{lowercase_id}",
+        "id": plugin_id,  # 插件 ID （package(.*).json 中的键）
+        "version": version,  # 插件版本
+        "name": plugin_info.get("name", ""),  # 插件名称
+        "notes": notes,  # 使用 package(.*).json 中的更新历史
+        "tag_name": f"{plugin_id}_v{version}",  # 发布的标签名
+        "archive_base": f"{lowercase_id}_v{version}",  # 插件归档文件名的基础部分
+        "backend_worker_path": f"{source_dir}",  # 打包时的工作目录
+        "backend_path": f"{lowercase_id}",  # 插件的后端源码目录
     }
 
 
