@@ -6,17 +6,30 @@
         "labels": "工具",
         "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Routeros_A.png",
         "author": "Aqr-K",
-        "v2": true,
-        "release": true,
-        "release_min_ver": "1.2.1",
+        "release": {
+            "1.2.1": {
+                "history": "测试 release 版本",
+                "requires_version": {
+                    "backend": ">=2.0.0",
+                    "frontend": ">=2.0.0"
+                }
+            }
+        },
+        "pre_release": {
+            "1.2.1": {
+                "history": "测试 pre-release 版本",
+                "requires_version": {
+                    "backend": ">=2.0.0",
+                    "frontend": ">=2.0.0"
+                }
+            }
+        },
         "level": 1,
         "history": {
             "v1.2.1": "增加: 后续开始支持通过 Releases 下载安装。",
             "v1.2": "增加：机器人命令调用，api接口调用。",
             "v1.1": "增加：工作流支持，仅v2.4.8+版本以上有效，增加定时器开关，可禁用定时任务。",
             "v1.0": "发布正式版本。"
-        },
-        "prerelease_vers": [],
-        "prerelease_history": {}
+        }
     }
 }
