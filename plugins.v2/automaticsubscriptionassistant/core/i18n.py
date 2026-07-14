@@ -167,6 +167,50 @@ _TEXT: Dict[str, Dict[str, str]] = {
     "非英语电影": {"zh-TW": "非英語電影", "en-US": "Films (Non-English)"},
     "英语剧集": {"zh-TW": "英語劇集", "en-US": "TV (English)"},
     "非英语剧集": {"zh-TW": "非英語劇集", "en-US": "TV (Non-English)"},
+    # ---- 热门媒体 popular：字段 label（电影/剧集 各一组，按拼接后的整串登记）----
+    "电影订阅": {"zh-TW": "電影訂閱", "en-US": "Movie subscription"},
+    "剧集订阅": {"zh-TW": "劇集訂閱", "en-US": "TV subscription"},
+    "电影风格": {"zh-TW": "電影風格", "en-US": "Movie genres"},
+    "剧集风格": {"zh-TW": "劇集風格", "en-US": "TV genres"},
+    "电影获取条数": {"zh-TW": "電影取得條數", "en-US": "Movie fetch count"},
+    "剧集获取条数": {"zh-TW": "劇集取得條數", "en-US": "TV fetch count"},
+    "电影评分下限(≥)": {"zh-TW": "電影評分下限(≥)", "en-US": "Movie rating ≥"},
+    "剧集评分下限(≥)": {"zh-TW": "劇集評分下限(≥)", "en-US": "TV rating ≥"},
+    "电影订阅人次(≥)": {"zh-TW": "電影訂閱人次(≥)", "en-US": "Movie subscribers ≥"},
+    "剧集订阅人次(≥)": {"zh-TW": "劇集訂閱人次(≥)", "en-US": "TV subscribers ≥"},
+    # ---- 热门媒体 popular：风格选项 title（TMDB genre，电影+剧集去重）----
+    "动作": {"zh-TW": "動作", "en-US": "Action"},
+    "冒险": {"zh-TW": "冒險", "en-US": "Adventure"},
+    "动画": {"zh-TW": "動畫", "en-US": "Animation"},
+    "喜剧": {"zh-TW": "喜劇", "en-US": "Comedy"},
+    "犯罪": {"zh-TW": "犯罪", "en-US": "Crime"},
+    "纪录片": {"zh-TW": "紀錄片", "en-US": "Documentary"},
+    "剧情": {"zh-TW": "劇情", "en-US": "Drama"},
+    "家庭": {"zh-TW": "家庭", "en-US": "Family"},
+    "奇幻": {"zh-TW": "奇幻", "en-US": "Fantasy"},
+    "历史": {"zh-TW": "歷史", "en-US": "History"},
+    "恐怖": {"zh-TW": "恐怖", "en-US": "Horror"},
+    "音乐": {"zh-TW": "音樂", "en-US": "Music"},
+    "悬疑": {"zh-TW": "懸疑", "en-US": "Mystery"},
+    "爱情": {"zh-TW": "愛情", "en-US": "Romance"},
+    "科幻": {"zh-TW": "科幻", "en-US": "Science Fiction"},
+    "电视电影": {"zh-TW": "電視電影", "en-US": "TV Movie"},
+    "惊悚": {"zh-TW": "驚悚", "en-US": "Thriller"},
+    "战争": {"zh-TW": "戰爭", "en-US": "War"},
+    "西部": {"zh-TW": "西部", "en-US": "Western"},
+    "动作冒险": {"zh-TW": "動作冒險", "en-US": "Action & Adventure"},
+    "儿童": {"zh-TW": "兒童", "en-US": "Kids"},
+    "新闻": {"zh-TW": "新聞", "en-US": "News"},
+    "真人秀": {"zh-TW": "真人秀", "en-US": "Reality"},
+    "科幻奇幻": {"zh-TW": "科幻奇幻", "en-US": "Sci-Fi & Fantasy"},
+    "肥皂剧": {"zh-TW": "肥皂劇", "en-US": "Soap"},
+    "戏剧": {"zh-TW": "戲劇", "en-US": "Talk"},
+    "战争政治": {"zh-TW": "戰爭政治", "en-US": "War & Politics"},
+    # ---- 热门媒体 popular：公告 notice（按整串登记）----
+    "热门媒体依赖 MoviePilot 全局『订阅数据共享』：未开启时服务端订阅统计接口直接返回空、本来源无法获取任何数据。请在下方『订阅数据共享』开关处开启（等同主程序设置，即时生效、无需重启）。": {
+        "zh-TW": "熱門媒體依賴 MoviePilot 全域『訂閱資料共享』：未開啟時服務端訂閱統計介面直接返回空、本來源無法取得任何資料。請在下方『訂閱資料共享』開關處開啟（等同主程式設定，即時生效、無需重啟）。",
+        "en-US": "Popular Media relies on MoviePilot's global 'Subscription data sharing'. When it is off, the server's subscription-statistics API returns empty and this source cannot fetch any data. Enable it via the 'Subscription data sharing' switch below (same as the main app setting; effective immediately, no restart).",
+    },
 }
 
 # (provider_id, field_key) -> {lang: hint 译文}（多行 hint 按键翻译，回退 zh-CN 原文）。
@@ -198,6 +242,30 @@ _HINTS: Dict[Any, Dict[str, str]] = {
     ("netflix", "use_cache"): {
         "zh-TW": "Netflix Top10 為固定 7 天週期，同一刷新週內重複抓取只會拿到相同內容、可能觸發風控。開啟後按資料 week 快取條目，下次刷新≈week+9天，跨執行生效、行程重啟後首次執行重抓",
         "en-US": "Netflix Top10 refreshes weekly; repeated fetches in the same week return identical data and may trigger rate-limiting. When on, caches entries by data week (next refresh ≈ week+9d), survives restarts",
+    },
+    ("popular", "movie_genres"): {
+        "zh-TW": "留空=全部；僅開啟電影訂閱時生效",
+        "en-US": "Empty = all; effective only when Movie subscription is on",
+    },
+    ("popular", "tv_genres"): {
+        "zh-TW": "留空=全部；僅開啟劇集訂閱時生效",
+        "en-US": "Empty = all; effective only when TV subscription is on",
+    },
+    ("popular", "movie_min_rating"): {
+        "zh-TW": "0=不限；下推服務端按評分過濾",
+        "en-US": "0 = no limit; pushed to the server to filter by rating",
+    },
+    ("popular", "tv_min_rating"): {
+        "zh-TW": "0=不限；下推服務端按評分過濾",
+        "en-US": "0 = no limit; pushed to the server to filter by rating",
+    },
+    ("popular", "movie_popularity"): {
+        "zh-TW": "0=不限；按統計訂閱人次過濾",
+        "en-US": "0 = no limit; filtered locally by subscriber count",
+    },
+    ("popular", "tv_popularity"): {
+        "zh-TW": "0=不限；按統計訂閱人次過濾",
+        "en-US": "0 = no limit; filtered locally by subscriber count",
     },
 }
 
