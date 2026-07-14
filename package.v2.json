@@ -22,6 +22,7 @@
         "labels": "订阅",
         "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png",
         "author": "Aqr-K",
+        "release": "true",
         "level": 1,
         "history": {
             "v0.2.9": "来源『状态检测』下沉后端兜底：新增 has_listening 判定，保存时自动关闭『已启用但无任何可监听内容』的来源，前端即时校验 + 后端保存双保险。",
