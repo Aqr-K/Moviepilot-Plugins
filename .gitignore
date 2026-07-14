@@ -10,7 +10,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -160,3 +159,11 @@ cython_debug/
 .idea/
 test/
 test_pluguns/
+
+superpowers/
+.claude/
+node_modules/
+dist/
+
+# 大型测试样例数据（本地保留，不入库，避免仓库膨胀）
+tests/plugins.v2/automaticsubscriptionassistant/examples/netflix/all-weeks-countries.tsv
