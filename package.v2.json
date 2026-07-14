@@ -18,13 +18,14 @@
     "AutomaticSubscriptionAssistant": {
         "name": "自动订阅助手",
         "description": "统一聚合豆瓣榜单/猫眼榜单/热门媒体/Mikan季度新番/奈飞Top10 等来源，可组合过滤后自动订阅。",
-        "version": "0.2.9",
+        "version": "0.2.10",
         "labels": "订阅",
         "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png",
         "author": "Aqr-K",
         "release": "true",
         "level": 1,
         "history": {
+            "v0.2.10": "补全『热门媒体』来源配置 UI 的国际化：字段标签、风格选项、评分/订阅人次提示与公告在繁體中文/English 下不再回退简体。",
             "v0.2.9": "来源『状态检测』下沉后端兜底：新增 has_listening 判定，保存时自动关闭『已启用但无任何可监听内容』的来源，前端即时校验 + 后端保存双保险。",
             "v0.2.8": "修复热门媒体恒取不到数据：服务端 stype 参数需传中文『电影』/『电视剧』，插件改为请求时将 movie/tv 映射为中文。",
             "v0.2.7": "修复热门订阅本插件取不到数据：改按无过滤基线请求以命中主程序共享缓存，min_rating 改为本地过滤；空结果日志区分『无数据/超时/HTTP 异常』。",
