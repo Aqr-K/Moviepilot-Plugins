@@ -102,6 +102,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 若插件带前端（存在 frontend/package.json），先安装依赖并构建产物（dist）
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build plugin frontend (if exists)
+        run: |
+          FRONTEND_DIR="${{ matrix.plugin.backend_worker_path }}/${{ matrix.plugin.backend_path }}/frontend"
+          if [ -f "$FRONTEND_DIR/package.json" ]; then
+            echo "检测到前端目录，开始构建：$FRONTEND_DIR"
+            (cd "$FRONTEND_DIR" && yarn install --frozen-lockfile && yarn build)
+            echo "前端构建完成，产物位于 $FRONTEND_DIR/dist"
+          else
+            echo "未检测到 $FRONTEND_DIR/package.json，跳过前端构建。"
+          fi
+
       - name: Package plugin source code
         run: |
           # {
@@ -127,11 +144,39 @@ jobs:
           echo "打包工作将在 '${{ matrix.plugin.backend_worker_path }}' 目录下进行..."
           echo "目标插件目录是 '${{ matrix.plugin.backend_path }}'..."
 
-          # 使用 tar 的 -C 参数切换到工作目录，并执行打包操作
-          tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" -C "${{ matrix.plugin.backend_worker_path }}" "${{ matrix.plugin.backend_path }}"
+          # 构建一个干净的暂存目录：仅保留需要发布的文件。
+          # 隔离（不打包发布）以下内容：
+          #   - frontend 下除 dist/ 以外的全部文件与目录（源码、node_modules、配置等）
+          #   - docs 目录
+          #   - 插件根目录的 README.md
+          #   - 依赖与缓存（node_modules / __pycache__ / .pytest_cache / *.pyc）
+          # tar 与 zip 共用同一份暂存目录，排除规则只维护一处。
+          STAGING_DIR="$(mktemp -d)"
+          cp -a "$FULL_SOURCE_PATH" "$STAGING_DIR/"
+          PLUGIN_STAGE="$STAGING_DIR/${{ matrix.plugin.backend_path }}"
 
-          # 使用 cd 命令切换到工作目录，并使用 zip 命令打包
-          (cd "${{ matrix.plugin.backend_worker_path }}" && zip -r "$GITHUB_WORKSPACE/${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.backend_path }}")
+          # 1) 剔除依赖与缓存目录/文件
+          find "$PLUGIN_STAGE" -type d \( -name node_modules -o -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
+          find "$PLUGIN_STAGE" -type f -name '*.pyc' -delete
+
+          # 2) 剔除 docs 目录与插件根目录的 README（不区分大小写）
+          rm -rf "$PLUGIN_STAGE/docs"
+          find "$PLUGIN_STAGE" -maxdepth 1 -type f -iname 'readme.md' -delete
+
+          # 3) frontend 下仅保留 dist/，其余文件与目录一律剔除
+          if [ -d "$PLUGIN_STAGE/frontend" ]; then
+            find "$PLUGIN_STAGE/frontend" -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf {} +
+          fi
+
+          echo "最终打包内容清单（暂存目录，深度 2）："
+          find "$PLUGIN_STAGE" -maxdepth 2 | sort
+
+          # 使用 tar 打包暂存后的干净目录
+          tar -czvf "${{ matrix.plugin.archive_base }}.tar.gz" \
+            -C "$STAGING_DIR" "${{ matrix.plugin.backend_path }}"
+
+          # 使用 zip 打包暂存后的干净目录
+          (cd "$STAGING_DIR" && zip -r "$GITHUB_WORKSPACE/${{ matrix.plugin.archive_base }}.zip" "${{ matrix.plugin.backend_path }}")
 
           # 生成校验和文件
           sha256sum "${{ matrix.plugin.archive_base }}.zip" > "${{ matrix.plugin.archive_base }}.zip.sha256"
