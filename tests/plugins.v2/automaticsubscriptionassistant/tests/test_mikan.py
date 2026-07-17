@@ -141,6 +141,32 @@ def test_mikan_fetch_without_resolve_skips_detail(monkeypatch):
     assert calls["n"] == 1                              # 仅季度列表一次，未抓详情
 
 
+def test_mikan_fetch_proxy_reaches_requests(monkeypatch):
+    """回归 issue#6：fetch 开启代理时，season/detail 请求需真正带上 proxies。
+
+    此前 ``self._proxies`` 挂在 provider 实例上，而发请求的 ``MikanApi`` 是另一个
+    对象，从未收到该属性，导致代理设置形同虚设（表现为详情/列表请求恒直连）。
+    """
+    seen_proxies = []
+    real_init = RequestUtils.__init__
+
+    def _spy_init(self, *a, **k):
+        seen_proxies.append(k.get("proxies"))
+        real_init(self, *a, **k)
+
+    monkeypatch.setattr(RequestUtils, "__init__", _spy_init)
+    monkeypatch.setattr(RequestUtils, "get_res", _fake_get_res)
+    monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(mikan_mod.settings, "PROXY_HOST", "http://127.0.0.1:1080")
+
+    list(MikanRankProvider().fetch(
+        {"year": 2026, "season": "春", "resolve_bangumi_id": True, "proxy": True}, None))
+
+    expected = {"http": "http://127.0.0.1:1080", "https": "http://127.0.0.1:1080"}
+    assert seen_proxies, "RequestUtils 从未被构造"
+    assert all(p == expected for p in seen_proxies), seen_proxies
+
+
 def test_mikan_empty_response_yields_nothing(monkeypatch):
     """季度页无返回时产出空。"""
     monkeypatch.setattr(RequestUtils, "get_res", lambda self, url, *a, **k: None)

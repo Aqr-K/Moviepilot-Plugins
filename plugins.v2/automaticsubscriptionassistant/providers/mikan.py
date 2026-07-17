@@ -89,6 +89,10 @@ def _to_int(value) -> int:
 class MikanApi:
     """蜜柑计划轻客户端：季度番剧列表 + 详情页信息（bgm id / 放送年 / 名称）提取。"""
 
+    def __init__(self, proxies: Optional[dict] = None) -> None:
+        """``proxies`` 由调用方（``MikanRankProvider``）传入，本实例请求全程携带。"""
+        self._proxies = proxies
+
     def _get(self, path: str) -> Optional[Tuple[str, str]]:
         """按主/备基址依次 GET ``path``，返回 ``(HTML 文本, 命中的基址)``。
 
@@ -100,7 +104,7 @@ class MikanApi:
             url = f"{base}{path}"
             try:
                 ret = RequestUtils(ua=MIKAN_UA, timeout=_REQUEST_TIMEOUT,
-                                   proxies=getattr(self, "_proxies", None)).get_res(url)
+                                   proxies=self._proxies).get_res(url)
             except Exception as err:  # noqa: BLE001 - 单个基址失败则尝试备用
                 last_err = err
                 continue
@@ -307,10 +311,10 @@ class MikanRankProvider(RankProvider):
         year = self._resolve_year(options.get("year"))
         season_str = self._resolve_season(options.get("season"))
         resolve_bgm = bool(options.get("resolve_bangumi_id", True))
-        # 可选代理：开启则本次抓取的 HTTP 请求走系统代理。
-        self._proxies = settings.PROXY if bool(options.get("proxy")) else None
+        # 可选代理：开启则本次抓取的 HTTP 请求（季度列表 + 详情）走系统代理。
+        proxies = settings.PROXY if bool(options.get("proxy")) else None
 
-        api = MikanApi()
+        api = MikanApi(proxies=proxies)
         entries = api.season(year, season_str)
         logger.info(
             f"{self.provider_name}：{year} 年 {season_str} 季 共 {len(entries)} 部番剧"

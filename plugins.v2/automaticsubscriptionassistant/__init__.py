@@ -54,7 +54,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "0.2.10"
+    plugin_version = "0.2.11"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
