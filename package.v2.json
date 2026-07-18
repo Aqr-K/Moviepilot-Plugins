@@ -18,13 +18,14 @@
     "AutomaticSubscriptionAssistant": {
         "name": "自动订阅助手",
         "description": "统一聚合豆瓣榜单/猫眼榜单/热门媒体/Mikan季度新番/奈飞Top10 等来源，可组合过滤后自动订阅。",
-        "version": "0.2.11",
+        "version": "0.2.12",
         "labels": "订阅",
         "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png",
         "author": "Aqr-K",
         "release": "true",
         "level": 1,
         "history": {
+            "v0.2.12": "修复定时任务 run_provider 缺 provider_id 报错（issue #7）；新增订阅流程 DEBUG 日志。",
             "v0.2.11": "修复 Mikan 季度新番『使用代理访问』开关不生效（issue #6）：代理配置挂在 provider 实例上，实际发请求的 MikanApi 从未收到，改为构造时显式注入，季度列表与详情请求现在都能正确走代理。",
             "v0.2.10": "补全『热门媒体』来源配置 UI 的国际化：字段标签、风格选项、评分/订阅人次提示与公告在繁體中文/English 下不再回退简体。",
             "v0.2.9": "来源『状态检测』下沉后端兜底：新增 has_listening 判定，保存时自动关闭『已启用但无任何可监听内容』的来源，前端即时校验 + 后端保存双保险。",
