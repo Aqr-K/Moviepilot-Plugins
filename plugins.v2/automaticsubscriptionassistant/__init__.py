@@ -54,7 +54,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "0.2.11"
+    plugin_version = "0.2.12"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -194,7 +194,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
                 "name": f"{spec.provider_name}订阅",
                 "trigger": trigger,
                 "func": self.run_provider,
-                "kwargs": {"provider_id": spec.provider_id},
+                "func_kwargs": {"provider_id": spec.provider_id},
             })
         return services
 

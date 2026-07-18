@@ -97,6 +97,13 @@ class SubscribeExecutor:
         is_tv = mediainfo.type == MediaType.TV
         sub_season = item.season if item.season is not None else mediainfo.season
         rid = self._identity(item, mediainfo, sub_season if is_tv else None)
+        logger.debug(
+            f"[{provider.provider_id}] 原始 名称={item.title!r} 年份={item.year or '-'} "
+            f"tmdb={item.tmdb_id or '-'} douban={item.douban_id or '-'} "
+            f"bangumi={item.bangumi_id or '-'} 季={item.season if item.season is not None else '-'}"
+            f" → 订阅 名称={mediainfo.title!r} 年份={mediainfo.year or '-'} "
+            f"tmdb={mediainfo.tmdb_id or '-'} 季={sub_season if is_tv else '-'}"
+        )
 
         # 5. post 过滤（识别后）。同样记录但不标记已处理。
         verdict = filter_chain.run("post", item, mediainfo, filters_config)
