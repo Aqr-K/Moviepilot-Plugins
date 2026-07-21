@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from app.core.metainfo import MetaInfo
+from app.log import logger
 from app.schemas.types import MediaType
 
 from .dedup import SubscribedIndex
