@@ -1,0 +1,10 @@
+[project]
+name = "automaticsubscriptionassistant"
+version = "3.0.0"
+description = "自动订阅助手的插件依赖清单"
+requires-python = ">=3.12"
+# 本插件只用到 apscheduler、beautifulsoup4、pytz 三个第三方包，它们都由宿主运行时提供。
+# 插件不重复声明：宿主依赖门禁会拦截降级或覆盖核心依赖的插件，重复声明还会把版本解析
+# 变成两处约束的交集，宿主升级时先炸的是插件。HTTP 与浏览器能力一律走 app.sdk 的封装，
+# 不直接依赖 httpx/requests/playwright。
+dependencies = []
