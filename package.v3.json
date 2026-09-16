@@ -1,0 +1,15 @@
+{
+  "AutomaticSubscriptionAssistant": {
+    "name": "自动订阅助手",
+    "description": "统一聚合豆瓣榜单/猫眼榜单/热门媒体/Mikan季度新番/奈飞Top10 等来源，可组合过滤后自动订阅。",
+    "version": "3.0.0",
+    "labels": "订阅",
+    "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png",
+    "author": "Aqr-K",
+    "release": "true",
+    "level": 1,
+    "history": {
+      "v3.0.0": "适配 MoviePilot v3 并修复多项缺陷。适配：媒体身份改用宿主统一的 media_source + media_id 二元组（v3 订阅表已无 tmdbid/doubanid/bangumiid 列），识别、订阅落地与热门媒体来源均改按新契约取用；宿主接口全面改吃 app.sdk 稳定契约面，不再依赖 app.core/app.log/app.utils/app.helper 兼容旁路。存储：订阅历史从插件 KV 迁入插件自管理数据表，存量数据首次启动自动迁移（原值留档备份），查询与分页下推 SQL；修复运行期间删除历史会被定时任务整体覆盖、以及历史无上限增长导致每次请求全量读写的问题。修复：批量退订/暂停新增归属校验，不再能按 ID 改动非本插件创建的订阅，并修正成功条数虚报；订阅管理改用配置中的用户名，改名后不再列不出订阅；整源抓取失败的兜底此前因 fetch 为生成器而从未生效，现已能正常上报；「立即运行」重复触发按来源合并，不再并发跑出多个任务；保存配置不再被在途任务阻塞；插件重载时不会丢失退出信号。前端：删空末页不再显示空列表、「全选」改用轻量端点并加时序守卫、关闭配置页不再残留轮询、定时表达式增加格式校验。"
+    }
+  }
+}
