@@ -5,14 +5,14 @@
 服务端统计仅区分 movie / tv 两类（动漫混在 tv 中，官方接口不单列），故本来源只暴露这两个 category。
 
 统计项的媒体身份是 ``(media_source, media_id)`` 二元组，一条只带一种来源的 ID；
-本模块把它摊进 ``RankMediaItem`` 对应的 ID 槽位，供 executor 按优先级识别。
+本模块原样保留这对 v3 主身份，不再把来源投影到固定的单源 ID 槽位。
 """
 from __future__ import annotations
 
 from typing import Iterator, List, Optional
 
 from app.adapters.external.server import MoviePilotServerHelper
-from app.schemas.types import MediaSource, MediaType
+from app.schemas.types import MediaType
 from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.media import resolve_media_identity
@@ -230,24 +230,10 @@ class PopularRankProvider(RankProvider):
 
     @staticmethod
     def _split_identity(media_source, media_id) -> dict:
-        """把单一媒体身份摊进 ``RankMediaItem`` 对应的 ID 槽位，无对应槽位则不填。"""
+        """返回宿主通用身份，不维护来源到固定字段的映射表。"""
         if not media_source or not media_id:
             return {}
-        slots = {
-            MediaSource.TMDB: ("tmdb_id", int),
-            MediaSource.Douban: ("douban_id", str),
-            MediaSource.Bangumi: ("bangumi_id", int),
-            MediaSource.TVDB: ("tvdb_id", int),
-            MediaSource.IMDb: ("imdb_id", str),
-        }
-        slot = slots.get(media_source)
-        if not slot:
-            return {}
-        field, caster = slot
-        try:
-            return {field: caster(media_id)}
-        except (TypeError, ValueError):
-            return {}
+        return {"media_source": media_source, "media_id": str(media_id)}
 
     @staticmethod
     def _map_media_type(raw) -> Optional[MediaType]:

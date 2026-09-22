@@ -1,16 +1,18 @@
 """core/migration.py 单元测试：存量历史从插件 KV 搬进自有表。"""
 from __future__ import annotations
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.plugins.automaticsubscriptionassistant.core.history import HISTORY_KEY, HistoryStore
+from app.plugins.automaticsubscriptionassistant.core.history import ensure_schema
 from app.plugins.automaticsubscriptionassistant.core.migration import (
     BACKUP_KEY,
     MIGRATION_KEY,
     migrate_history_from_kv,
 )
+from app.plugins.automaticsubscriptionassistant.core.tables import SubscribeHistory
 
 
 def _store():
@@ -170,3 +172,55 @@ def test_survives_unreadable_kv():
 
     assert result.performed is False
     assert "kv down" in (result.error or "")
+
+
+def test_existing_legacy_table_backfills_generic_identity_without_new_source_columns():
+    """旧表的来源 ID 只用于迁移，升级后统一写入通用身份。"""
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE subscribe_history (
+                id INTEGER PRIMARY KEY,
+                "unique" VARCHAR(255) NOT NULL,
+                provider VARCHAR(64) NOT NULL,
+                title VARCHAR(512) NOT NULL,
+                year VARCHAR(16),
+                type VARCHAR(32),
+                tmdbid INTEGER,
+                doubanid VARCHAR(64),
+                bangumiid INTEGER,
+                anilistid INTEGER,
+                imdbid VARCHAR(64),
+                tvdbid INTEGER,
+                poster TEXT,
+                season INTEGER,
+                status VARCHAR(32) NOT NULL,
+                reason TEXT,
+                time VARCHAR(32) NOT NULL
+            )
+        """))
+        connection.execute(text("""
+            INSERT INTO subscribe_history
+                (id, "unique", provider, title, tmdbid, status, time)
+            VALUES (1, 'legacy-tmdb', 'douban', 'A', 550, 'subscribed', '2026-01-01')
+        """))
+        connection.execute(text("""
+            INSERT INTO subscribe_history
+                (id, "unique", provider, title, imdbid, status, time)
+            VALUES (2, 'legacy-imdb', 'douban', 'B', 'tt0137523', 'subscribed', '2026-01-01')
+        """))
+
+    ensure_schema(engine)
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            "SELECT id, media_source, media_id FROM subscribe_history ORDER BY id"
+        )).all()
+    assert rows == [
+        (1, "themoviedb", "550"),
+        (2, "imdb", "tt0137523"),
+    ]
+    columns = {column["name"] for column in inspect(engine).get_columns("subscribe_history")}
+    assert {"media_source", "media_id", "episode_group"}.issubset(columns)
+    assert not {"anilistid", "imdbid", "tvdbid"}.intersection(
+        column.name for column in SubscribeHistory.__table__.columns
+    )

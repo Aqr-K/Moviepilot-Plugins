@@ -272,18 +272,20 @@ def test_popular_fetch_maps_movie_and_tv(monkeypatch):
 
     movie = by_cat["movie"]
     assert movie.type_hint == MediaType.MOVIE
-    assert movie.tmdb_id == 100
+    assert movie.media_source.value == "themoviedb"
+    assert movie.media_id == "100"
     assert movie.year == "2021"            # int -> str
     assert movie.source_meta["count"] == 500
     assert "anime_mode" not in movie.source_meta
     assert movie.unique_seed == "电影X:themoviedb:100"
-    # 身份只有一个来源，其余槽位留空
+    # 身份只保留宿主通用二元组，不投影到来源专属槽位
     assert movie.douban_id is None and movie.bangumi_id is None
 
     tv = by_cat["tv"]
     assert tv.type_hint == MediaType.TV
     assert "anime_mode" not in tv.source_meta
-    assert tv.bangumi_id == 10             # media_source=bangumi -> 落 bangumi 槽位
+    assert tv.media_source.value == "bangumi"
+    assert tv.media_id == "10"
     assert tv.season == 1
     assert tv.tmdb_id is None
     assert tv.douban_id is None

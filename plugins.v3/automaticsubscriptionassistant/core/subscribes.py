@@ -18,7 +18,8 @@ PLUGIN_USERNAME = "自动订阅助手"
 # 序列化到前端的订阅字段。媒体身份是 ``media_source`` + ``media_id`` 二元组，
 # 单独的 media_id 不足以定位媒体，两者必须成对取用。
 _FIELDS = ("id", "name", "year", "type", "media_source", "media_id", "season",
-           "poster", "state", "total_episode", "lack_episode", "date", "last_update")
+           "episode_group", "poster", "state", "total_episode", "lack_episode", "date",
+           "last_update")
 
 
 class SubscribeManager:

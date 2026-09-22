@@ -38,7 +38,7 @@ class RankProvider(ABC):
 
     @abstractmethod
     def fetch(self, options: dict, context: "ProviderContext") -> Iterator["RankMediaItem"]:
-        """抓取+解析榜单，产出标准化条目（可能未带 tmdbid）。
+        """抓取+解析榜单，产出标准化条目（可携带宿主通用媒体身份）。
 
         以生成器 yield ``RankMediaItem``。单条解析失败应内部 try/except continue；
         整源抓取失败应向上抛出，由 runner 捕获处理。

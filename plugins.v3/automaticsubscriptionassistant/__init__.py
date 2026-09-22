@@ -56,7 +56,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.0.0"
+    plugin_version = "3.1.0"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -717,7 +717,8 @@ class AutomaticSubscriptionAssistant(_PluginBase):
         try:
             spec = provider.get_spec()
             pconf = ProviderConfig(self._settings.provider_raw(provider.provider_id), spec)
-            # 还原候选：类型中文串 → MediaType 枚举；tmdb/douban/bangumi id 供按优先级识别。
+            # 还原候选：类型中文串 → MediaType 枚举；优先恢复 v3 通用身份，旧 ID
+            # 字段同时保留，供旧历史与兼容识别链使用。
             type_val = rec.get("type")
             try:
                 type_hint = MediaType(type_val) if type_val else None
@@ -732,6 +733,9 @@ class AutomaticSubscriptionAssistant(_PluginBase):
                 bangumi_id=rec.get("bangumiid"),
                 season=rec.get("season"),
                 poster=rec.get("poster"),
+                media_source=rec.get("media_source"),
+                media_id=rec.get("media_id"),
+                episode_group=rec.get("episode_group"),
             )
             context = ProviderContext(
                 chain=self.chain,

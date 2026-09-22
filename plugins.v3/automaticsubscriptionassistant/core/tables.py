@@ -35,6 +35,11 @@ class SubscribeHistory(Base):
     tmdbid = Column(Integer)
     doubanid = Column(String(64))
     bangumiid = Column(Integer)
+    # v3 宿主通用媒体身份；下面三类 ID 列是旧表遗留，只用于兼容历史与前端展示。
+    # 新来源必须写入 media_source/media_id，不再新增 anilistid/imdbid/tvdbid 等单源列。
+    media_source = Column(String(64))
+    media_id = Column(String(255))
+    episode_group = Column(String(128))
     poster = Column(Text)
     season = Column(Integer)
     # SubscribeStatus.value。
@@ -59,6 +64,9 @@ class SubscribeHistory(Base):
             "tmdbid": self.tmdbid,
             "doubanid": self.doubanid,
             "bangumiid": self.bangumiid,
+            "media_source": self.media_source,
+            "media_id": self.media_id,
+            "episode_group": self.episode_group,
             "poster": self.poster,
             "season": self.season,
             "status": self.status,

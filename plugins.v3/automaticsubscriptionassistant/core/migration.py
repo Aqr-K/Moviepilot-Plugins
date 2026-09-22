@@ -74,7 +74,7 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
             skipped += 1
             continue
         try:
-            store.record(HistoryRecord.from_dict(raw))
+            store.record(HistoryRecord.from_dict(raw, migrate_legacy=True))
             imported += 1
         except Exception as exc:  # noqa: BLE001 - 单条坏数据不该毁掉整次迁移
             skipped += 1

@@ -1,6 +1,6 @@
 [project]
 name = "automaticsubscriptionassistant"
-version = "3.0.0"
+version = "3.1.0"
 description = "自动订阅助手的插件依赖清单"
 requires-python = ">=3.12"
 # 本插件只用到 apscheduler、beautifulsoup4、pytz 三个第三方包，它们都由宿主运行时提供。

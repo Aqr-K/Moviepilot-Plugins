@@ -15,7 +15,7 @@
 | 层 | 文件 | 职责 | 明确不做 |
 |----|------|------|----------|
 | **入口层** | `__init__.py` | 解析配置、注册定时调度（`get_service`）、暴露 HTTP API（`get_api`）、编排 `run_provider` | 不含抓取细节、不含落地细节 |
-| **provider 层** | `providers/*.py` | 只负责「抓取 + 解析成标准中间条目 `RankMediaItem`」，可能尚未带 `tmdbid` | 不碰识别、不碰订阅落地、不写历史 |
+| **provider 层** | `providers/*.py` | 只负责「抓取 + 解析成标准中间条目 `RankMediaItem`」，可携带宿主通用 `media_source/media_id` | 不碰识别、不碰订阅落地、不写历史 |
 | **filter 层** | `core/filters.py` | 只返回判定结果 `FilterVerdict`（accept / reject + 原因） | 不写状态、不加订阅、不改条目 |
 | **executor 层** | `core/executor.py` | 唯一落地管线：去重键 → pre 过滤 → 识别 → post 过滤 → 媒体库查重 → 订阅查重 → 加订阅 → 记历史 | 不抓取、不解析源数据 |
 | **runner 层** | `core/runner.py` | 编排单源：`fetch` → 逐条 `executor.process`，累加状态计数，尊重退出信号，兜底整源抓取失败 | 不实现落地/过滤具体逻辑 |
@@ -86,6 +86,21 @@ flowchart TD
 - 每条 item 都包在 `try/except` 内，单条异常 → `ERROR` 状态并 `continue`，不影响整源。
 - `ALREADY_HANDLED` 是唯一「不写新历史」的分支（该身份键已有正向终态记录）。
 - 历史按行写入并即时提交：两个来源同时运行、或用户在运行期间删记录，都不会互相覆盖。
+
+### v3 媒体身份边界
+
+`RankMediaItem` 以宿主 v3 的 `media_source + media_id` 为主身份，旧版
+`tmdb_id/douban_id/bangumi_id` 等字段只作为缓存和兼容入口。executor 将该身份原样
+传给宿主 `chain.recognize_media`，识别成功后再从 `MediaInfo` 取最终主身份，交给宿主
+`SubscribeChain.exists` 和 `SubscribeChain.add`；插件不再自行把来源 ID 映射成 TMDB。
+
+插件历史表只新增通用的 `media_source/media_id`（以及剧集组）字段；旧的三类 ID 列
+仅作存量兼容。AniList、IMDb、TVDB 或未来扩展来源不会再触发新的单源列/模型字段，
+旧版单源列只在迁移时读取并回填到通用身份。
+
+`SubscribedIndex` 仅按宿主订阅行建立识别前的快速索引，支持内置及合法扩展来源，并
+按季号/剧集组生成键。索引未命中、身份不完整或来源无法规范化时，仍由宿主识别与
+`exists` 完成最终判断。
 
 ---
 
@@ -205,7 +220,7 @@ classDiagram
 
 ## 4. 五个 Provider
 
-五源共用统一的 `RankProvider.fetch` 契约，产出标准化的 `RankMediaItem`（可能未带 `tmdbid`，识别交由 executor 完成），差异只在数据源与解析：
+五源共用统一的 `RankProvider.fetch` 契约，产出标准化的 `RankMediaItem`（可能没有媒体身份，识别交由 executor 完成），差异只在数据源与解析：
 
 ### 4.1 `douban` — DoubanRankProvider（豆瓣榜单）
 
@@ -225,7 +240,7 @@ classDiagram
 - **默认 cron**：`5 1 * * *`。
 - **要点**：
   - **`stype` 必须传中文**（`电影` / `电视剧`）——服务端只接受中文枚举，传英文 `movie`/`tv` 会返回空列表；provider 内用 `_STYPE_CN` 映射 `movie→电影`、`tv→电视剧`。返回项 `type` 亦为中文，`_map_media_type` 经 `MediaType.MOVIE.value == "电影"` 天然兼容。服务端统计仅电影 / 电视剧两类（动漫混在电视剧中、官方不单列，`MediaType` 枚举亦无「动漫」）。
-  - 统计项已自带 `tmdbid` / `doubanid` / `bangumiid` 等标识，识别更快。
+  - 统计项直接携带宿主的 `media_source/media_id`，不再投影到固定的单源 ID 槽位。
   - **配置按电影 / 剧集两大组独立**，字段 key 统一 `{category}_{enabled|genres|page_cnt|min_rating|popularity}`：`{category}_enabled` 开关独立控制订阅（缺省两类都开）；**风格标签** `movie_genres` / `tv_genres`（各自一套 TMDB genre，电影 19 / 剧集 16 项）下推 `genre_id`——空=全部，多选则逐 genre 分别请求、按 `unique_seed` 去重合并（`动画=16`）；`{category}_page_cnt` 独立获取条数；`{category}_min_rating`（按统计项 `vote`）、`{category}_popularity`（按 `source_meta["count"]` 订阅人次）**均在 provider 内本地过滤**。
   - **命中主程序『热门订阅』的同一份共享缓存**：请求走「无过滤基线」（`min_rating=None`、`genre` 为空时不带 `genre_id`），与主程序 `/subscribe/popular` 端点（同样调 `async_get_subscribe_statistic`）参数一致——二者共享同一进程内缓存（cache 装饰器规范化 `async_` 前缀、cache key 相同）。故评分下限改本地过滤而非下推服务端，既避免过滤 cache key 各自打空，也能直接命中前端已填充的缓存。
   - **空结果诊断**：门控关闭时提前告警并返回；已开启却为空时用原始请求读 `status_code`，日志区分「200 但无数据 / 连不上·超时 / HTTP 异常」，不再笼统。
@@ -234,7 +249,7 @@ classDiagram
 
 - **数据源**：蜜柑计划（`mikanani.me`，备用 `mikanime.tv`）季度番剧页 `/Home/BangumiCoverFlowByDayOfWeek?year={year}&seasonStr={季}`（`seasonStr` 实测为中文季名 `春`/`夏`/`秋`/`冬`）+ 番剧详情页 `/Home/Bangumi/{mikan_id}`。API 移植自 `mikan_flutter` 的 `mikan.ts`，请求需带 Mikan 专用 UA（`... MikanProject/1.0.0`）。
 - **默认 cron**：`0 10 * * 1`（季番每周更新，每周一抓一次）。
-- **要点**：轻客户端 `MikanApi` 用 `RequestUtils(ua=MIKAN_UA)` 抓 HTML，`BeautifulSoup(html, "lxml")` 解析 `div.sk-bangumi li`：`span[data-bangumiid]`(Mikan id)、`a.an-text[title]`(中文标题)、`span[data-src]`(封面)、按星期分组的 `div.row` 文本(week)。`year=0` 取当前年，`season="当前"` 按当前月推导季度（1-3→冬 / 4-6→春 / 7-9→夏 / 10-12→秋）。`resolve_bangumi_id` 开启时逐条抓详情页、正则 `b(?:gm|angumi)\.tv/subject/(\d+)` 提取 bgm.tv subject id 填入 `bangumi_id`，每条间隔约 0.6s 并响应 `context.event` 退出信号；抓不到则 `None`，executor 退化为标题+年份识别。番剧统一 `MediaType.TV`，`unique_seed = mikan_id`。识别由 executor 走 `recognize_media(media_source=MediaSource.Bangumi, media_id=...)`（bangumi→tmdb 桥接）。
+- **要点**：轻客户端 `MikanApi` 用 `RequestUtils(ua=MIKAN_UA)` 抓 HTML，`BeautifulSoup(html, "lxml")` 解析 `div.sk-bangumi li`：`span[data-bangumiid]`(Mikan id)、`a.an-text[title]`(中文标题)、`span[data-src]`(封面)、按星期分组的 `div.row` 文本(week)。`year=0` 取当前年，`season="当前"` 按当前月推导季度（1-3→冬 / 4-6→春 / 7-9→夏 / 10-12→秋）。`resolve_bangumi_id` 开启时逐条抓详情页、正则 `b(?:gm|angumi)\.tv/subject/(\d+)` 提取 bgm.tv subject id 填入 `bangumi_id`，每条间隔约 0.6s 并响应 `context.event` 退出信号；抓不到则 `None`，executor 退化为标题+年份识别。番剧统一 `MediaType.TV`，`unique_seed = mikan_id`。识别由 executor 走宿主通用身份 `media_source=MediaSource.Bangumi, media_id=...`，最终主身份与订阅持久化由宿主决定。
 
 ### 4.5 `netflix` — NetflixRankProvider（奈飞榜单）
 

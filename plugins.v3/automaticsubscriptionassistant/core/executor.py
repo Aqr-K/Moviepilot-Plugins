@@ -88,6 +88,8 @@ class SubscribeExecutor:
             meta.type = item.type_hint
         if item.season is not None:
             meta.begin_season = item.season
+        if item.episode_group:
+            meta.episode_group = item.episode_group
         mediainfo = self._recognize(item, meta)
         if mediainfo is None:
             self._record(history, identity, provider, item, None, None,
@@ -97,13 +99,16 @@ class SubscribeExecutor:
         # 识别成功后，用识别结果计算规范身份与订阅季（供记录合并与索引登记）。
         is_tv = mediainfo.type == MediaType.TV
         sub_season = item.season if item.season is not None else mediainfo.season
+        episode_group = getattr(mediainfo, "episode_group", None) or item.episode_group
         rid = self._identity(item, mediainfo, sub_season if is_tv else None)
         logger.debug(
             f"[{provider.provider_id}] 原始 名称={item.title!r} 年份={item.year or '-'} "
-            f"tmdb={item.tmdb_id or '-'} douban={item.douban_id or '-'} "
-            f"bangumi={item.bangumi_id or '-'} 季={item.season if item.season is not None else '-'}"
+            f"source={item.source_identity()[0] or '-'} id={item.source_identity()[1] or '-'} "
+            f"季={item.season if item.season is not None else '-'}"
             f" → 订阅 名称={mediainfo.title!r} 年份={mediainfo.year or '-'} "
-            f"tmdb={mediainfo.tmdb_id or '-'} 季={sub_season if is_tv else '-'}"
+            f"source={self._resolve_identity(mediainfo)[0] or '-'} "
+            f"id={self._resolve_identity(mediainfo)[1] or '-'} "
+            f"季={sub_season if is_tv else '-'}"
         )
 
         # 5. post 过滤（识别后）。同样记录但不标记已处理。
@@ -118,19 +123,21 @@ class SubscribeExecutor:
         if exist_flag:
             self._record(history, rid, provider, item, mediainfo, None,
                          SubscribeStatus.MEDIA_EXISTS, "媒体库已存在")
-            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None)
+            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None,
+                            episode_group)
             return SubscribeOutcome(SubscribeStatus.MEDIA_EXISTS, item, mediainfo=mediainfo, reason="媒体库已存在")
 
         # 7. 订阅查重（保留：预去重只是快速路径，此处仍是最终安全网）。
         if self.ctx.subscribechain.exists(mediainfo=mediainfo, meta=meta):
             self._record(history, rid, provider, item, mediainfo, None,
                          SubscribeStatus.SUBSCRIPTION_EXISTS, "订阅已存在")
-            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None)
+            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None,
+                            episode_group)
             return SubscribeOutcome(SubscribeStatus.SUBSCRIPTION_EXISTS, item, mediainfo=mediainfo, reason="订阅已存在")
 
         # 8. 加订阅。宿主按 (media_source, media_id) 定位媒体，身份取自识别结果而非榜单条目：
         # 榜单给的可能是豆瓣 ID，识别后宿主已换算到它自己的主身份，照抄条目 ID 会订到错的条目上。
-        media_source, media_id = resolve_media_identity(mediainfo)
+        media_source, media_id = self._resolve_identity(mediainfo)
         if not media_source or not media_id:
             reason = "识别结果缺少媒体身份，无法订阅"
             self._record(history, rid, provider, item, mediainfo, sub_season,
@@ -142,26 +149,33 @@ class SubscribeExecutor:
             mtype=mediainfo.type,
             media_source=media_source,
             media_id=media_id,
+            episode_group=episode_group,
             season=sub_season if is_tv else None,
+            music_type=getattr(mediainfo, "music_type", None),
             exist_ok=self.gcfg.exist_ok,
             username=self.gcfg.username,
         )
         if sid:
             self._record(history, rid, provider, item, mediainfo, sub_season,
                          SubscribeStatus.SUBSCRIBED, None, subscribe_id=sid)
-            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None)
+            self._mark_done(history, rid, mediainfo, sub_season if is_tv else None,
+                            episode_group)
             return SubscribeOutcome(SubscribeStatus.SUBSCRIBED, item, mediainfo=mediainfo,
                                     subscribe_id=sid, message=err)
         self._record(history, rid, provider, item, mediainfo, sub_season, SubscribeStatus.ERROR, err)
         return SubscribeOutcome(SubscribeStatus.ERROR, item, mediainfo=mediainfo, reason=err)
 
-    def _mark_done(self, history, identity, mediainfo, season) -> None:
+    def _mark_done(self, history, identity, mediainfo, season, episode_group=None) -> None:
         """正向终态收尾：标记已处理并登记进已订阅索引，供本轮后续渠道跳过。"""
         history.mark_handled(identity)
+        media_source, media_id = self._resolve_identity(mediainfo)
         self.index.add_media(
+            media_source=media_source,
+            media_id=media_id,
             tmdbid=mediainfo.tmdb_id,
             doubanid=mediainfo.douban_id,
             bangumiid=getattr(mediainfo, "bangumi_id", None),
+            episode_group=episode_group or getattr(mediainfo, "episode_group", None),
             mtype=mediainfo.type,
             season=season,
             title=mediainfo.title,
@@ -173,31 +187,55 @@ class SubscribeExecutor:
         """规范媒体身份键：识别成功用识别结果，否则回退条目自带标识。"""
         if mediainfo is not None:
             is_tv = mediainfo.type == MediaType.TV if mediainfo.type else False
+            media_source, media_id = SubscribeExecutor._resolve_identity(mediainfo)
             return media_identity(
                 tmdb_id=mediainfo.tmdb_id, douban_id=mediainfo.douban_id,
                 bangumi_id=getattr(mediainfo, "bangumi_id", None),
-                is_tv=is_tv, season=season, title=mediainfo.title, year=mediainfo.year)
+                media_source=media_source, media_id=media_id,
+                is_tv=is_tv, season=season, title=mediainfo.title, year=mediainfo.year,
+                episode_group=getattr(mediainfo, "episode_group", None) or item.episode_group)
         return item.identity()
 
     def _recognize(self, item: RankMediaItem, meta) -> Optional["MediaInfo"]:
-        """按 ID 优先级识别媒体：tmdb > douban > bangumi > 纯标题。"""
-        if item.tmdb_id:
+        """按条目通用身份请求宿主识别，缺身份时退化为标题识别。"""
+        media_source, media_id = item.source_identity()
+        if media_source and media_id:
             return self.ctx.chain.recognize_media(
-                meta=meta, media_source=MediaSource.TMDB, media_id=str(item.tmdb_id),
+                meta=meta, media_source=media_source, media_id=media_id,
                 mtype=item.type_hint)
-        if item.douban_id:
-            return self.ctx.chain.recognize_media(
-                meta=meta, media_source=MediaSource.Douban, media_id=str(item.douban_id))
-        if item.bangumi_id:
-            return self.ctx.chain.recognize_media(
-                meta=meta, media_source=MediaSource.Bangumi, media_id=str(item.bangumi_id))
         return self.ctx.chain.recognize_media(meta=meta)
+
+    @staticmethod
+    def _resolve_identity(media) -> tuple:
+        """解析媒体对象的 v3 主身份，兼容旧对象仅有辅助 ID 的情况。"""
+        if media is None:
+            return None, None
+        source, media_id = resolve_media_identity(media)
+        if source and media_id:
+            return source, media_id
+        # v3 MediaInfo 正常总有主身份；以下仅为旧缓存/测试对象提供兼容回退。
+        for source, field in (
+            (MediaSource.TMDB, "tmdb_id"),
+            (MediaSource.Douban, "douban_id"),
+            (MediaSource.Bangumi, "bangumi_id"),
+        ):
+            value = getattr(media, field, None)
+            if value is not None and str(value).strip() and str(value).strip() != "0":
+                return source, str(value).strip()
+        return None, None
 
     def _record(self, history, unique, provider, item, mediainfo, season,
                 status: SubscribeStatus, reason, subscribe_id=None) -> None:
         """构造并写入一条历史记录（unique 为媒体身份键，跨渠道合并展示）。"""
         if season is None:
             season = item.season
+        media_source, media_id = self._resolve_identity(mediainfo)
+        if not media_source or not media_id:
+            media_source, media_id = item.source_identity()
+        episode_group = (
+            getattr(mediainfo, "episode_group", None) if mediainfo is not None
+            else item.episode_group
+        ) or item.episode_group
         record = HistoryRecord(
             unique=unique,
             provider=provider.provider_id,
@@ -211,6 +249,9 @@ class SubscribeExecutor:
             doubanid=mediainfo.douban_id if mediainfo else item.douban_id,
             # 增存 bangumi id：供「重新识别」无损重建 mikan/番剧候选（识别链按 bangumiid 命中）。
             bangumiid=(getattr(mediainfo, "bangumi_id", None) if mediainfo else item.bangumi_id),
+            media_source=media_source,
+            media_id=media_id,
+            episode_group=episode_group,
             poster=(mediainfo.get_poster_image() if mediainfo else item.poster),
             season=season,
             status=status.value,

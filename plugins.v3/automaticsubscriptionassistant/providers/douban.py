@@ -3,7 +3,7 @@
 数据来源为 RSSHub 的豆瓣榜单 RSS（内置榜单路由 + 用户自定义地址）。RSSHub 基址可自定义，
 部分地区 rsshub.app 被 SNI 黑名单封锁时，可对接用户自建的 RSSHub 实例（``rsshub_base`` 选项）。
 抓取逻辑移植自参考插件 ``doubanrankplus``，纯函数化后由统一落地管线消费。
-豆瓣评分、季号等信息在 executor 识别（recognize_media(doubanid=...)）后由 MediaInfo 提供，
+豆瓣评分、季号等信息在 executor 通过宿主通用媒体身份识别后由 MediaInfo 提供，
 故 VoteFilter 归属 post 阶段。原插件的 70 分钟限流退避窗口本次未移植（见 README）。
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import re
 import xml.dom.minidom
 from typing import Iterator, List, Optional
 
-from app.schemas.types import MediaType
+from app.schemas.types import MediaSource, MediaType
 from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
@@ -230,6 +230,8 @@ class DoubanRankProvider(RankProvider):
             year=year,
             type_hint=type_hint,
             douban_id=douban_id,
+            media_source=MediaSource.Douban if douban_id else None,
+            media_id=douban_id,
             poster=self._parse_poster(item),
             source_meta={"link": str(link)},
             unique_seed=f"{title}_{year}_(DB:{douban_id})",

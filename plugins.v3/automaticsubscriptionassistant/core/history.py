@@ -13,9 +13,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import IntegrityError
 
+from .models import _legacy_source_identity, _normalize_media_identity
 from .tables import Base, SubscribeHistory
 
 if TYPE_CHECKING:
@@ -75,7 +76,79 @@ def ensure_schema(engine) -> None:
     if key in _PREPARED_ENGINES:
         return
     Base.metadata.create_all(engine, checkfirst=True)
+    _migrate_history_columns(engine)
     _PREPARED_ENGINES.add(key)
+
+
+def _migrate_history_columns(engine) -> None:
+    """为已经存在的历史表补齐 v3 身份字段并回填主身份。
+
+    插件表没有宿主 Alembic 迁移链，``create_all`` 不会给旧表增加列。这里仅对
+    固定的插件表名执行逐列 ``ALTER TABLE ... ADD COLUMN``，新安装和已有安装都
+    能安全启动。旧表中的 tmdb/douban/bangumi 以及早期临时增加过的单源列只在
+    迁移时读取一次，统一回填到 ``media_source/media_id``，新 schema 不再声明这些
+    按来源增长的列。
+    """
+    table = SubscribeHistory.__table__
+    existing = {column["name"] for column in inspect(engine).get_columns(table.name)}
+    missing = [column for column in table.columns if column.name not in existing]
+    quoted_table = engine.dialect.identifier_preparer.quote(table.name)
+    with engine.begin() as connection:
+        for column in missing:
+            quoted_column = engine.dialect.identifier_preparer.quote(column.name)
+            column_type = column.type.compile(dialect=engine.dialect)
+            connection.execute(text(
+                f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {column_type}"
+            ))
+        existing.update(column.name for column in missing)
+        _backfill_media_identity(connection, engine, quoted_table, existing)
+
+
+def _backfill_media_identity(connection, engine, quoted_table: str,
+                             columns: set[str]) -> None:
+    """将旧版分散 ID 一次性转换为通用身份，不把旧列带入新 ORM 模型。"""
+    legacy_columns = (
+        "tmdbid", "doubanid", "bangumiid", "anilistid", "imdbid", "tvdbid",
+    )
+    available = [name for name in legacy_columns if name in columns]
+    if "id" not in columns or "media_source" not in columns or "media_id" not in columns:
+        return
+    if not available:
+        return
+
+    quoted_columns = ", ".join(
+        engine.dialect.identifier_preparer.quote(name) for name in ("id", "media_source", "media_id", *available)
+    )
+    rows = connection.execute(text(
+        f"SELECT {quoted_columns} FROM {quoted_table}"
+    )).mappings()
+    quoted_source = engine.dialect.identifier_preparer.quote("media_source")
+    quoted_id = engine.dialect.identifier_preparer.quote("media_id")
+    quoted_pk = engine.dialect.identifier_preparer.quote("id")
+    update_sql = text(
+        f"UPDATE {quoted_table} SET {quoted_source} = :media_source, "
+        f"{quoted_id} = :media_id WHERE {quoted_pk} = :row_id"
+    )
+    for row in rows:
+        current_source, current_id = _normalize_media_identity(
+            row.get("media_source"), row.get("media_id"))
+        if current_source and current_id:
+            continue
+        source, media_id = _legacy_source_identity(
+            tmdb_id=row.get("tmdbid"),
+            douban_id=row.get("doubanid"),
+            bangumi_id=row.get("bangumiid"),
+            # 这些字段只为兼容此前开发版本已经生成的数据库列；不会进入新模型。
+            anilist_id=row.get("anilistid"),
+            imdb_id=row.get("imdbid"),
+            tvdb_id=row.get("tvdbid"),
+        )
+        if source and media_id:
+            connection.execute(update_sql, {
+                "media_source": getattr(source, "value", source),
+                "media_id": media_id,
+                "row_id": row.get("id"),
+            })
 
 
 class HistoryStore:
