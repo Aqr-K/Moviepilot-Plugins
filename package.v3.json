@@ -6,7 +6,7 @@
     "labels": "订阅",
     "icon": "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png",
     "author": "Aqr-K",
-    "release": "true",
+    "release": true,
     "level": 1,
     "history": {
       "v3.1.0": "数据库结构与历史数据迁移升级：插件历史与预去重统一使用 media_source + media_id；旧 KV/旧表中的来源专属 ID 自动回填到通用身份；不再新增 anilistid、imdbid、tvdbid 等来源专属字段，未来扩展来源无需变更表结构。",

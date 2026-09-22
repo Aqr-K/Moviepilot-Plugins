@@ -27,7 +27,7 @@ class PluginMarketsAutoUpdate(_PluginBase):
     # 插件图标
     plugin_icon = "upload.png"
     # 插件版本
-    plugin_version = "2.0"
+    plugin_version = "2.1"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -66,7 +66,10 @@ class PluginMarketsAutoUpdate(_PluginBase):
     _enabled_proxy = True
     _timeout = 5
     _wiki_url = "https://wiki.movie-pilot.org/zh/plugin"
-    _wiki_url_xpath = '//pre[@class="prismjs line-numbers" and @v-pre="true"]/code/text()'
+    # 官方 Wiki 曾以 prismjs 代码块记录插件库地址，改版后已变为链接列表，此值仅用于识别历史配置并自动迁移
+    LEGACY_WIKI_URL_XPATH = '//pre[@class="prismjs line-numbers" and @v-pre="true"]/code/text()'
+    DEFAULT_WIKI_URL_XPATH = '//ul/li/a[starts-with(@href,"https://github.com/")]/@href'
+    _wiki_url_xpath = DEFAULT_WIKI_URL_XPATH
 
     _event = None
     _scheduler: Optional[BackgroundScheduler] = None
@@ -96,6 +99,10 @@ class PluginMarketsAutoUpdate(_PluginBase):
             self._timeout = config.get("timeout")
             self._wiki_url = config.get("wiki_url")
             self._wiki_url_xpath = config.get("wiki_url_xpath")
+            # 官方 Wiki 已改版，历史配置中保存的旧 Xpath 永远匹配不到内容，自动迁移到新的默认值
+            if self._wiki_url_xpath and self._wiki_url_xpath.strip() == self.LEGACY_WIKI_URL_XPATH:
+                self._wiki_url_xpath = self.DEFAULT_WIKI_URL_XPATH
+                logger.warning("检测到官方Wiki改版前的旧Xpath配置，已自动迁移为新的默认Xpath")
 
             last_config = self.get_config(plugin_id="PluginMarketsAutoUpdate")
             self.last_blacklist_markets_list = last_config.get("last_blacklist_markets_list", [])
@@ -186,7 +193,7 @@ class PluginMarketsAutoUpdate(_PluginBase):
             "enabled_proxy": True,
             "timeout": 5,
             "wiki_url": "https://wiki.movie-pilot.org/zh/plugin",
-            "wiki_url_xpath": '//pre[@class="prismjs line-numbers" and @v-pre="true"]/code/text()',
+            "wiki_url_xpath": self.DEFAULT_WIKI_URL_XPATH,
         }
 
         # 消息类型
@@ -931,13 +938,13 @@ class PluginMarketsAutoUpdate(_PluginBase):
             """
             try:
                 tree = html.fromstring(res_body.text)
-                if self._wiki_url_xpath:
-                    code = tree.xpath(self._wiki_url_xpath)
-                else:
-                    code = tree.xpath('//pre[@class="prismjs line-numbers" and @v-pre="true"]/code/text()')
+                code = tree.xpath(self._wiki_url_xpath or self.DEFAULT_WIKI_URL_XPATH)
                 if not code:
                     raise ValueError("未找到Xpath路径的值")
-                code = ''.join(code).strip()
+                parts = [str(item).strip() for item in code if str(item).strip()]
+                # Xpath 命中多个地址节点时（如链接列表）需用逗号分隔，命中单个代码块时行为与此前一致
+                separator = "," if all(part.startswith("http") for part in parts) else ""
+                code = separator.join(parts)
                 logger.debug(f"成功提取到当前网页中记录的插件库地址 - {code}")
                 return code
             except Exception as err:
