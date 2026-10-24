@@ -28,8 +28,8 @@ class SubscribedIndex:
     """强标识键 → 规范媒体身份键 的映射。"""
 
     def __init__(self) -> None:
-        # 键形态：电影 ``m:tmdb:{id}``；剧集 ``tv:tmdb:{id}:*`` 与 ``tv:tmdb:{id}:s{season}``；
-        # 通用 ``douban:{id}`` / ``bangumi:{id}``。值为该媒体的规范身份键。
+        # 键形态：电影 ``m:tmdb:{id}``；剧集 ``tv:tmdb:{id}:s{season}``；
+        # 豆瓣/Bangumi 同样按明确类型与季登记。值为该媒体的规范身份键。
         self._keys: Dict[str, str] = {}
 
     def add_media(self, tmdbid: Optional[int] = None, doubanid: Optional[str] = None,
@@ -49,46 +49,25 @@ class SubscribedIndex:
     def _strong_keys(tmdbid, doubanid, bangumiid, is_tv: bool, season):
         """产出该媒体应登记的全部强标识键。"""
         keys = []
-        if tmdbid:
+        for source, value in (("tmdb", tmdbid), ("douban", doubanid), ("bangumi", bangumiid)):
+            if not value:
+                continue
             if is_tv:
-                keys.append(f"tv:tmdb:{tmdbid}:*")
                 if season is not None:
-                    keys.append(f"tv:tmdb:{tmdbid}:s{season}")
+                    keys.append(f"tv:{source}:{value}:s{season}")
+            elif source == "tmdb":
+                keys.append(f"m:tmdb:{value}")
             else:
-                keys.append(f"m:tmdb:{tmdbid}")
-        if doubanid:
-            keys.append(f"douban:{doubanid}")
-        if bangumiid:
-            keys.append(f"bangumi:{bangumiid}")
+                keys.append(f"{source}:{value}")
         return keys
 
     def _match_key(self, item: "RankMediaItem") -> Optional[str]:
-        """返回条目命中的强标识键（优先 tmdb > douban > bangumi），未命中返回 None。"""
-        tid = item.tmdb_id
-        if tid:
-            if _is_tv(item.type_hint):
-                # 剧集：季已知只匹配同季键；季未知匹配任意季键（与 exists(season=None) 一致）。
-                if item.season is not None:
-                    k = f"tv:tmdb:{tid}:s{item.season}"
-                    if k in self._keys:
-                        return k
-                else:
-                    k = f"tv:tmdb:{tid}:*"
-                    if k in self._keys:
-                        return k
-            elif item.type_hint is not None:
-                # 电影（类型已知）。类型未知时不做 tmdb 快速路径（保守）。
-                k = f"m:tmdb:{tid}"
-                if k in self._keys:
-                    return k
-        if item.douban_id:
-            k = f"douban:{item.douban_id}"
-            if k in self._keys:
-                return k
-        if item.bangumi_id:
-            k = f"bangumi:{item.bangumi_id}"
-            if k in self._keys:
-                return k
+        """按明确的类型与季匹配，未知季候选继续交给识别链。"""
+        tmdbid = item.tmdb_id if item.type_hint is not None else None
+        for key in self._strong_keys(tmdbid, item.douban_id, item.bangumi_id,
+                                     _is_tv(item.type_hint), item.season):
+            if key in self._keys:
+                return key
         return None
 
     def contains(self, item: "RankMediaItem") -> bool:

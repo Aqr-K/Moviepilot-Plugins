@@ -117,7 +117,7 @@ class GlobalConfig(TypedConfigAccess):
 
     @property
     def exist_ok(self) -> bool:
-        """加订阅时允许已存在（避免重复报错）。"""
+        """允许媒体库已存在时仍创建订阅；活动订阅继续查重。"""
         return self.get_bool("exist_ok", True)
 
     @property

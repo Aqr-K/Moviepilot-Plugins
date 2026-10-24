@@ -92,29 +92,13 @@ def _strong_keys(media_source, media_id, is_tv: bool, season,
         return []
     group = _group_suffix(episode_group)
 
-    if prefix == "tmdb":
-        if not type_known:
-            return []
-        if is_tv:
-            if for_item:
-                if season is None:
-                    return [f"tv:tmdb:{media_id}:*{group}"]
-                return [f"tv:tmdb:{media_id}:s{season}{group}"]
-            keys = [f"tv:tmdb:{media_id}:*{group}"]
-            if season is not None:
-                keys.append(f"tv:tmdb:{media_id}:s{season}{group}")
-            return keys
-        return [f"m:tmdb:{media_id}{group}"]
-
+    # 电视剧只有目标季明确时才能命中；任意单季不是“整剧已订阅”的证据。
     if is_tv:
-        if for_item:
-            if season is None:
-                return [f"tv:{prefix}:{media_id}:*{group}"]
-            return [f"tv:{prefix}:{media_id}:s{season}{group}"]
-        keys = [f"tv:{prefix}:{media_id}:*{group}"]
-        if season is not None:
-            keys.append(f"tv:{prefix}:{media_id}:s{season}{group}")
-        return keys
+        if season is None:
+            return []
+        return [f"tv:{prefix}:{media_id}:s{season}{group}"]
+    if prefix == "tmdb":
+        return [f"m:tmdb:{media_id}{group}"] if type_known else []
 
     if type_known:
         # 无类型别名只用于非电视剧，兼容旧版 add_media(doubanid=...) 与历史索引。

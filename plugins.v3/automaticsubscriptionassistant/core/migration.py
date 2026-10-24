@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Callable, Optional
 
 from .history import HISTORY_KEY
@@ -67,17 +68,38 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
             _safe(del_data, HISTORY_KEY, logger)
         return MigrationResult(performed=False)
 
+    # 归档必须先完成；失败时绝不删除原键或写完成标记。
+    try:
+        backup = get_data(BACKUP_KEY)
+        archived = list(backup) if isinstance(backup, list) else []
+        seen = {json.dumps(raw, sort_keys=True, ensure_ascii=False) for raw in archived}
+        for raw in legacy:
+            identity = json.dumps(raw, sort_keys=True, ensure_ascii=False)
+            if identity not in seen:
+                archived.append(raw)
+                seen.add(identity)
+        if save_data(BACKUP_KEY, archived) is False:
+            raise RuntimeError("历史备份写入失败")
+    except Exception as exc:  # noqa: BLE001 - 保留原始数据供后续重试
+        if logger:
+            logger.error(f"历史迁移备份失败，原始数据已保留: {exc}")
+        return MigrationResult(performed=False, source_total=len(legacy), error=str(exc))
+
     imported = 0
     skipped = 0
+    retry = []
     for raw in legacy:
         if not isinstance(raw, dict) or not raw.get("unique"):
             skipped += 1
             continue
         try:
-            store.record(HistoryRecord.from_dict(raw, migrate_legacy=True))
+            # 收尾失败后重跑，不用旧 KV 覆盖已更新的数据库记录。
+            if store.get(raw["unique"]) is None:
+                store.record(HistoryRecord.from_dict(raw, migrate_legacy=True))
             imported += 1
         except Exception as exc:  # noqa: BLE001 - 单条坏数据不该毁掉整次迁移
             skipped += 1
+            retry.append(raw)
             if logger:
                 logger.warning(f"迁移历史记录 {raw.get('unique')} 失败，已跳过: {exc}")
 
@@ -95,10 +117,21 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
         "skipped": skipped,
         "source_total": len(legacy),
     }
-    # 先留备份再写标记，最后才移除原键：任一步失败，下次启动仍能从原键重跑。
-    _safe(save_data, BACKUP_KEY, logger, legacy)
-    _safe(save_data, MIGRATION_KEY, logger, marker)
-    _safe(del_data, HISTORY_KEY, logger)
+    try:
+        if retry:
+            # 可解析但暂时写入失败的记录继续留在迁移源；坏记录已在备份中留档。
+            if save_data(HISTORY_KEY, retry) is False:
+                raise RuntimeError("保存待重试历史失败")
+        else:
+            if save_data(MIGRATION_KEY, marker) is False:
+                raise RuntimeError("保存迁移标记失败")
+            if del_data(HISTORY_KEY) is False:
+                raise RuntimeError("删除已迁移历史失败")
+    except Exception as exc:  # noqa: BLE001 - 已导入部分保留，原始数据可重试
+        if logger:
+            logger.warning(f"历史迁移收尾失败: {exc}")
+        return MigrationResult(performed=True, imported=imported, skipped=skipped,
+                               source_total=len(legacy), error=str(exc))
 
     result = MigrationResult(performed=True, imported=imported, skipped=skipped,
                              source_total=len(legacy))

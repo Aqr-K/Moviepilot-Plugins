@@ -39,6 +39,7 @@ def test_init_loads_handled_only_for_positive_status():
     assert store.is_handled("c") is False
     assert store.is_handled("d") is False
     assert store.is_handled("e") is False
+    assert store.is_handled(None) is False
 
 
 def test_init_empty_when_none():
@@ -52,11 +53,11 @@ def test_mark_handled():
     assert store.is_handled("k") is True
 
 
-def test_record_does_not_mark_handled():
-    # record 只写记录、不标记已处理；是否已处理由 executor 依终态显式 mark_handled。
+def test_record_persists_positive_status():
+    # 正向终态立即持久化，另一个运行任务可直接查重。
     store, _ = _make_store()
     store.record(_rec("douban:1"))
-    assert store.is_handled("douban:1") is False
+    assert store.is_handled("douban:1") is True
     records, total = store.query()
     assert total == 1
     assert records[0]["unique"] == "douban:1"
@@ -183,3 +184,16 @@ def test_stats():
     assert stats["total"] == 3
     assert stats["by_provider"] == {"douban": 2, "maoyan": 1}
     assert stats["by_status"] == {"subscribed": 2, "filtered": 1}
+
+
+def test_interleaved_stores_preserve_latest_writes_and_deletions():
+    """旧任务的 flush 不得覆盖其他来源或复活用户已删除的历史。"""
+    first, kv = _make_store()
+    second = HistoryStore(kv.get, lambda key, value: kv.__setitem__(key, value), lambda key: kv.pop(key, None))
+    first.record(_rec("a"))
+    second.record(_rec("b"))
+    assert {row["unique"] for row in first.query()[0]} == {"a", "b"}
+    second.delete("a")
+    first.flush()
+    assert [row["unique"] for row in first.query()[0]] == ["b"]
+    assert not first.is_handled("a")

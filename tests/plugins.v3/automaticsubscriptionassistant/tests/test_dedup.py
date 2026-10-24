@@ -72,8 +72,8 @@ def test_contains_tv_is_season_aware():
     assert idx.contains(RankMediaItem(title="x", tmdb_id=1396, type_hint=MediaType.TV, season=1)) is True
     # 不同季不命中（不能误伤新一季）
     assert idx.contains(RankMediaItem(title="x", tmdb_id=1396, type_hint=MediaType.TV, season=2)) is False
-    # 季未知匹配任意季（与 exists(season=None) 语义一致）
-    assert idx.contains(RankMediaItem(title="x", tmdb_id=1396, type_hint=MediaType.TV, season=None)) is True
+    # 未知季不是任意单季的充分查重证据，应继续识别
+    assert idx.contains(RankMediaItem(title="x", tmdb_id=1396, type_hint=MediaType.TV, season=None)) is False
 
 
 def test_contains_ignores_tmdb_when_type_unknown():

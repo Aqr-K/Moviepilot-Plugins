@@ -128,7 +128,7 @@ class PopularRankProvider(RankProvider):
                 continue
             genre_ids = self._as_int_list(options.get(f"{category}_genres"))
             # 每类型独立获取条数 / 评分下限 / 订阅人次。
-            page_cnt = self._to_int(options.get(f"{category}_page_cnt"), _DEFAULT_PAGE_CNT)
+            page_cnt = self._to_int(options.get(f"{category}_page_cnt", options.get("page_cnt")), _DEFAULT_PAGE_CNT)
             # 0/非法评分视为不限（None -> helper 不带 min_rating 参数）。
             min_rating = self._to_float(options.get(f"{category}_min_rating")) or None
             popularity = self._to_int(options.get(f"{category}_popularity"), 0)
@@ -225,7 +225,8 @@ class PopularRankProvider(RankProvider):
             season=self._to_optional_int(sub.get("season")),
             poster=sub.get("poster"),
             source_meta=source_meta,
-            unique_seed=f"{name}:{media_source.value if media_source else None}:{media_id}",
+            unique_seed=(f"{name}:{getattr(media_source, 'value', media_source)}:{media_id}"
+                         + (f":s{self._to_optional_int(sub.get('season'))}" if mtype == MediaType.TV else "")),
         )
 
     @staticmethod
@@ -304,6 +305,8 @@ class PopularRankProvider(RankProvider):
         key = f"{category}_enabled"
         if key in options:
             return bool(options.get(key))
+        if "categories" in options:
+            return category in PopularRankProvider._as_list(options.get("categories"))
         return True
 
     @staticmethod

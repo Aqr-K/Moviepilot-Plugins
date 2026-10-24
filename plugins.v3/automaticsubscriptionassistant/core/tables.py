@@ -8,7 +8,7 @@ SQL 排序与范围比较，也与前端既有展示同形，无需换算。
 """
 from __future__ import annotations
 
-from sqlalchemy import Column, Index, Integer, String, Text
+from sqlalchemy import Column, Index, Integer, JSON, String, Text
 
 from app.sdk.database import plugin_declarative_base
 
@@ -42,6 +42,8 @@ class SubscribeHistory(Base):
     episode_group = Column(String(128))
     poster = Column(Text)
     season = Column(Integer)
+    candidate_key = Column(String(80))
+    source_item = Column(JSON)
     # SubscribeStatus.value。
     status = Column(String(32), nullable=False, default="", index=True)
     reason = Column(Text)
@@ -69,11 +71,23 @@ class SubscribeHistory(Base):
             "episode_group": self.episode_group,
             "poster": self.poster,
             "season": self.season,
+            "candidate_key": self.candidate_key,
+            "source_item": self.source_item,
             "status": self.status,
             "reason": self.reason,
             "time": self.time,
         }
 
 
+class SubscribeHandled(Base):
+    """独立的成功事实与候选别名，不随展示历史的保留上限删除。"""
+
+    __tablename__ = "subscribe_handled"
+
+    key = Column(String(255), primary_key=True)
+    canonical = Column(String(255), nullable=False, index=True)
+    provider = Column(String(64), nullable=False, default="")
+
+
 # 供 get_database_models() 声明与存储层取用。
-MODELS = [SubscribeHistory]
+MODELS = [SubscribeHistory, SubscribeHandled]

@@ -21,7 +21,7 @@
 
 **Netflix 数据无外部 id、无年份**：``year=None``、无 tmdb/douban/bangumi id，executor 只能
 退化为「标题 + 类型」名称识别（命中率中等，冷门/多译名条目可能识别失败，见 README 已知限制）。
-``unique_seed = f"{type_value}_{show_title}"``（``type_value`` 为 ``movie``/``tv``），单次
+剧集 ``unique_seed`` 还包含季号（无季明确写 None）（``type_value`` 为 ``movie``/``tv``），单次
 fetch 内按 ``unique_seed`` 去重（同一片名在全球 + 多国重复只产一次）。
 
 **富元数据模式（``rich_metadata`` 开）**：改抓 Netflix Tudum Top10 **榜单页**（HTML），页面
@@ -412,10 +412,11 @@ class NetflixRankProvider(RankProvider):
                 return
 
         # 未命中：执行实际抓取，收集为完整列表。
+        self._fetch_complete = True
         items = self._collect(options, context)
 
         # 中途收到退出信号（结果不完整）-> 不写缓存；仅开启缓存且抓取完整时才写 L1 + L2。
-        if use_cache and not self._should_stop(context):
+        if use_cache and items and self._fetch_complete and not self._should_stop(context):
             week = self._latest_week(items)
             valid_until = self._valid_until(week, now)
             with _CACHE_LOCK:
@@ -516,6 +517,8 @@ class NetflixRankProvider(RankProvider):
         """
         options = options or {}
         payload = {
+            # 修复季去重和失败缓存后，不复用旧版本已缓存的缺项结果。
+            "schema": 2,
             "rich_metadata": bool(options.get("rich_metadata", False)),
             "global": bool(options.get("global", True)),
             "global_dataset": str(options.get("global_dataset") or DATASET_WEEKLY).strip(),
@@ -687,6 +690,7 @@ class NetflixRankProvider(RankProvider):
             try:
                 item = self._build_item(row, category, scope)
             except Exception as err:  # noqa: BLE001 - 单条兜底，不影响整源
+                self._fetch_complete = False
                 logger.error(f"{self.provider_name}：解析榜单条目失败：{err}")
                 continue
             if not item.title:
@@ -723,7 +727,8 @@ class NetflixRankProvider(RankProvider):
             type_hint=mtype,
             season=season,
             source_meta=source_meta,
-            unique_seed=f"{type_value}_{show_title}",
+            unique_seed=(f"{type_value}_{show_title}:s{season}" if not is_movie
+                         else f"{type_value}_{show_title}"),
         )
 
     # ==================== 富元数据模式 ====================
@@ -751,18 +756,21 @@ class NetflixRankProvider(RankProvider):
         selections = self._resolve_country_selections(options)
 
         # 富页任务（全球英语 + 国家榜）。
-        tasks = self._build_rich_tasks(global_cats, selections)
+        dataset = str(options.get("global_dataset") or DATASET_WEEKLY).strip()
+        rich_cats = [] if dataset == DATASET_POPULAR else global_cats
+        tasks = self._build_rich_tasks(rich_cats, selections)
         if tasks:
             yield from self._run_rich_tasks(tasks, max_workers, limit, proxy, seen, context)
 
         # 全球非英语无稳定富页 -> 回退现有 TSV（title-only），记日志说明。
-        non_english = [c for c in global_cats if c in _GLOBAL_NON_ENGLISH]
+        # 普通富页是周榜，史上最热的所有类别必须回退对应 TSV。
+        non_english = (global_cats if dataset == DATASET_POPULAR else
+                       [c for c in global_cats if c in _GLOBAL_NON_ENGLISH])
         if non_english and not self._should_stop(context):
             logger.info(
-                f"{self.provider_name}：富模式下全球非英语（{'/'.join(non_english)}）"
-                f"无内嵌富页，回退 TSV title-only"
+                f"{self.provider_name}：所选全球数据集/类别（{'/'.join(non_english)}）"
+                f"无对应富页，回退 {dataset} TSV"
             )
-            dataset = str(options.get("global_dataset") or DATASET_WEEKLY).strip()
             yield from self._fetch_global(dataset, non_english, limit, proxy, seen, context)
 
     @classmethod
@@ -830,7 +838,10 @@ class NetflixRankProvider(RankProvider):
                     continue
                 try:
                     results[idx] = future.result()
-                except Exception as err:  # noqa: BLE001 - 单页失败仅跳过，不影响其余
+                    if not results[idx]:
+                        self._fetch_complete = False
+                except Exception as err:  # noqa: BLE001 - 单页失败不污染成功缓存
+                    self._fetch_complete = False
                     logger.warning(
                         f"{self.provider_name}：富页 {tasks[idx]['url']} 抓取失败，跳过：{err}"
                     )
@@ -859,6 +870,7 @@ class NetflixRankProvider(RankProvider):
             try:
                 item = self._build_rich_item(entry, task["kind"], task["scope"])
             except Exception as err:  # noqa: BLE001 - 单条兜底，不影响整源
+                self._fetch_complete = False
                 logger.error(f"{self.provider_name}：解析富页条目失败：{err}")
                 continue
             if not item.title:
@@ -903,7 +915,8 @@ class NetflixRankProvider(RankProvider):
             type_hint=mtype,
             season=season,
             source_meta=source_meta,
-            unique_seed=f"{type_value}_{title_used}",
+            unique_seed=(f"{type_value}_{title_used}:s{season}" if not is_movie
+                         else f"{type_value}_{title_used}"),
         )
 
     def _load_rich_page(self, url: str, proxy: bool) -> List[dict]:

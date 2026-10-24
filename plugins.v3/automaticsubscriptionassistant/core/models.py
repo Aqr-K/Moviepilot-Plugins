@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from hashlib import sha256
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -202,6 +204,19 @@ class RankMediaItem:
     media_id: Optional[str] = None
     episode_group: Optional[str] = None
 
+    def candidate_key(self) -> str:
+        """按原始候选的身份、标题、年份和季号生成精确的持久查重别名。
+
+        不包含海报、热度等易变字段；保留标题和年份，避免来源未填季号时把后续季
+        当成同一个整剧候选。跨来源合并仍以识别后的规范媒体身份为准。
+        """
+        values = self.to_dict()
+        for key in ("poster", "source_meta", "unique_seed"):
+            values.pop(key, None)
+        values["title"] = (self.title or "").strip().casefold()
+        payload = json.dumps(values, sort_keys=True, ensure_ascii=False)
+        return "candidate:" + sha256(payload.encode("utf-8")).hexdigest()
+
     def dedup_key(self, provider_id: str) -> str:
         """返回去重键：``{provider_id}:{unique_seed}``。"""
         return f"{provider_id}:{self.unique_seed}"
@@ -363,10 +378,15 @@ class HistoryRecord:
     media_id: Optional[str] = None
     episode_group: Optional[str] = None
 
+    candidate_key: Optional[str] = None
+    source_item: Optional[dict] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """序列化为可持久化 dict。"""
         return {
             "unique": self.unique,
+            "candidate_key": self.candidate_key,
+            "source_item": self.source_item,
             "provider": self.provider,
             "title": self.title,
             "year": self.year,
@@ -406,6 +426,8 @@ class HistoryRecord:
                 tvdb_id=data.get("tvdbid"))
         return cls(
             unique=data.get("unique", ""),
+            candidate_key=data.get("candidate_key"),
+            source_item=data.get("source_item"),
             provider=data.get("provider", ""),
             title=data.get("title", ""),
             year=data.get("year"),

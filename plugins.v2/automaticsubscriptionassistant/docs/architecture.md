@@ -47,23 +47,23 @@ flowchart TD
     Dedup -->|命中| SAH["ALREADY_HANDLED<br/>(不记新历史)"]
     Dedup -->|未命中| Pre{"2. pre 过滤<br/>vote 前/year/popularity"}
 
-    Pre -->|reject| FPre["FILTERED (pre)<br/>记历史 + 标记 handled"]
+    Pre -->|reject| FPre["FILTERED (pre)<br/>记历史，不标记 handled"]
     Pre -->|accept| Reco{"3. 识别<br/>recognize_media(meta, tmdb/douban/bangumi)"}
 
-    Reco -->|None| UR["UNRECOGNIZED<br/>记历史 + 标记 handled"]
+    Reco -->|None| UR["UNRECOGNIZED<br/>记历史，不标记 handled"]
     Reco -->|MediaInfo| Post{"4. post 过滤<br/>vote/media_type"}
 
-    Post -->|reject| FPost["FILTERED (post)<br/>记历史 + 标记 handled"]
+    Post -->|reject| FPost["FILTERED (post)<br/>记历史，不标记 handled"]
     Post -->|accept| Lib{"5. 媒体库查重<br/>get_no_exists_info -> exist_flag?"}
 
-    Lib -->|True 已完整存在| ME["MEDIA_EXISTS<br/>记历史 + 标记 handled"]
+    Lib -->|True 已完整存在| ME["MEDIA_EXISTS<br/>记历史；仅正向终态标记 handled"]
     Lib -->|False 有缺失| Sub{"6. 订阅查重<br/>subscribechain.exists?"}
 
-    Sub -->|True| SE["SUBSCRIPTION_EXISTS<br/>记历史 + 标记 handled"]
+    Sub -->|True| SE["SUBSCRIPTION_EXISTS<br/>记历史；仅正向终态标记 handled"]
     Sub -->|False| Add["7. 加订阅<br/>subscribechain.add(...) -> (sid, err)"]
 
     Add -->|sid 有值| OK["SUBSCRIBED<br/>记历史(subscribe_id) + 标记 handled"]
-    Add -->|sid 为空| ERR["ERROR<br/>记历史(reason=err) + 标记 handled"]
+    Add -->|sid 为空| ERR["ERROR<br/>记历史(reason=err)，允许重试"]
 
     SAH --> Stats["8. 累加 stats[status]"]
     FPre --> Stats
@@ -275,3 +275,7 @@ classDiagram
 - **历史重新识别**（`POST /history/recognize`）：对「异常 / 未识别」历史记录还原 `RankMediaItem`，复用落地管线单条重跑识别与订阅（如未上映、季度预告等暂无 TMDB/Bangumi 记录的条目）。
 </content>
 </invoke>
+
+## 目标季与历史并发
+
+标题季号在预去重前解析，未知季继续识别，规范身份在识别后再查成功状态。KV 历史不再持有运行期间的全量快照，各实例在共享锁中读最新值、合并并即时写入；`flush()` 是兼容空操作。成功事实与精确候选别名独立保存在 `history_handled`，显式删除/清空同时解除对应身份。

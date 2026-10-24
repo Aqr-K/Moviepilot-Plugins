@@ -58,7 +58,7 @@
         v-for="item in paged"
         :key="item.id"
         :poster="item.poster || ''"
-        :name="item.name || t('unknown')"
+        :name="mediaName(item)"
         :lines="cardLines(item)"
         :status="stateBadge(item.state)"
         :selectable="selectMode"
@@ -137,7 +137,7 @@ const MSG = {
     filter: '筛选', filterTitle: '筛选与搜索', filterType: '类型', filterStatus: '状态', filterYear: '发行年份',
     yearFrom: '起始年', yearTo: '结束年', filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
     clearFilters: '清除筛选', 'mt.movie': '电影', 'mt.tv': '电视剧',
-    kType: '类型', kSource: '来源', kTime: '订阅时间', kYear: '发行年份', source: '自动订阅助手',
+    kType: '类型', kGroup: '剧集组', kSource: '来源', kTime: '订阅时间', kYear: '发行年份', source: '自动订阅助手',
     emptyNone: '暂无本插件创建的订阅', emptyFiltered: '没有符合条件的订阅', emptyHint: '启用来源运行后，订阅会出现在这里',
     error: '获取订阅失败：', actionFailed: '操作失败：',
     confirmDelete: '确认退订选中的 {n} 个订阅？此操作不可撤销。',
@@ -152,7 +152,7 @@ const MSG = {
     filter: '篩選', filterTitle: '篩選與搜尋', filterType: '類型', filterStatus: '狀態', filterYear: '發行年份',
     yearFrom: '起始年', yearTo: '結束年', filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
     clearFilters: '清除篩選', 'mt.movie': '電影', 'mt.tv': '電視劇',
-    kType: '類型', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份', source: '自動訂閱助手',
+    kType: '類型', kGroup: '劇集組', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份', source: '自動訂閱助手',
     emptyNone: '暫無本外掛建立的訂閱', emptyFiltered: '沒有符合條件的訂閱', emptyHint: '啟用來源執行後，訂閱會出現在這裡',
     error: '取得訂閱失敗：', actionFailed: '操作失敗：',
     confirmDelete: '確認退訂選中的 {n} 個訂閱？此操作不可復原。',
@@ -167,7 +167,7 @@ const MSG = {
     filter: 'Filters', filterTitle: 'Filter & search', filterType: 'Type', filterStatus: 'Status', filterYear: 'Release year',
     yearFrom: 'From', yearTo: 'To', filterAll: 'All', searchLabel: 'Search', applyFilter: 'Apply', resetFilter: 'Reset',
     clearFilters: 'Clear filters', 'mt.movie': 'Movies', 'mt.tv': 'TV series',
-    kType: 'Type', kSource: 'Source', kTime: 'Added', kYear: 'Year', source: 'Auto Subscribe Assistant',
+    kType: 'Type', kGroup: 'Episode group', kSource: 'Source', kTime: 'Added', kYear: 'Year', source: 'Auto Subscribe Assistant',
     emptyNone: 'No subscriptions created by this plugin', emptyFiltered: 'No subscriptions match', emptyHint: 'Subscriptions appear here after sources run',
     error: 'Failed to load subscriptions: ', actionFailed: 'Action failed: ',
     confirmDelete: 'Unsubscribe {n} selected subscription(s)? This cannot be undone.',
@@ -263,6 +263,12 @@ function stateBadge(state) {
   const label = MSG['zh-CN']['st.' + state] ? t('st.' + state) : (state || t('unknown'))
   return { label, color: cssColor(m.color), icon: m.icon }
 }
+function mediaName(item) {
+  const parts = [item.name || t('unknown')]
+  if (item.type === '电视剧' && item.season != null) parts.push(`S${String(item.season).padStart(2, '0')}`)
+  if (item.episode_group) parts.push(`${t('kGroup')}: ${item.episode_group}`)
+  return parts.join(' · ')
+}
 function cardLines(item) {
   return [
     { icon: 'mdi-shape-outline', label: t('kType'), value: item.type || t('unknown') },
@@ -289,14 +295,18 @@ async function runConfirm() {
   error.value = ''
   try {
     if (!props.api || typeof props.api.post !== 'function') throw new Error('API')
-    if (confirm.kind === 'delete') {
-      await props.api.post(`${PLUGIN}/subscribes/delete`, { ids: confirm.ids })
-    } else {
-      await props.api.post(`${PLUGIN}/subscribes/state`, { ids: confirm.ids, state: confirm.kind === 'pause' ? 'S' : 'R' })
-    }
-    confirm.ids.forEach(id => selected.delete(id))
-    confirm.open = false
+    const res = confirm.kind === 'delete'
+      ? await props.api.post(`${PLUGIN}/subscribes/delete`, { ids: confirm.ids })
+      : await props.api.post(`${PLUGIN}/subscribes/state`, { ids: confirm.ids, state: confirm.kind === 'pause' ? 'S' : 'R' })
+    if (res?.code !== 0) throw new Error(res?.message || t('unknown'))
+    const failed = Array.isArray(res.failed_ids) ? res.failed_ids : (res.failed ? [...confirm.ids] : [])
+    const succeeded = Array.isArray(res.ok_ids) ? res.ok_ids : (res.failed ? [] : [...confirm.ids])
+    succeeded.forEach(id => selected.delete(id))
+    failed.forEach(id => selected.add(id))
+    confirm.ids = failed
+    confirm.open = failed.length > 0
     await fetchSubs()
+    if (res.failed) error.value = res.message || t('actionFailed') + res.failed
     emit('changed')
   } catch (e) {
     error.value = t('actionFailed') + (e?.message || e)

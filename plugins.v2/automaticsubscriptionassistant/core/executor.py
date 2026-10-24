@@ -11,6 +11,8 @@ post 过滤 -> 媒体库查重 -> 订阅查重 -> 加订阅 -> 记历史。每�
 """
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
@@ -56,7 +58,15 @@ class SubscribeExecutor:
             return SubscribeOutcome(SubscribeStatus.ERROR, item, reason=reason)
 
     def _process(self, item, provider, filter_chain, history, filters_config) -> SubscribeOutcome:
+        # 在任何快速去重之前解析明确季号；replace 避免修改 provider 的缓存对象。
+        meta = MetaInfo(item.title)
+        if item.season is not None:
+            meta.begin_season = item.season
+        item = replace(item, season=meta.begin_season,
+                       type_hint=(item.type_hint or (MediaType.TV if meta.begin_season is not None else None)))
         identity = item.identity()
+        candidate_key = item.candidate_key()
+        candidate_is_exact = item.type_hint == MediaType.MOVIE or item.season is not None
 
         # 1. 预去重快速路径：强标识命中「已订阅 / 本轮已处理」→ 跳过识别。
         if self.index.contains(item):
@@ -66,11 +76,15 @@ class SubscribeExecutor:
                 self._record(history, canonical, provider, item, None, None,
                              SubscribeStatus.SUBSCRIPTION_EXISTS, "已订阅（预去重，跳过识别）")
                 history.mark_handled(canonical)
+            if candidate_is_exact:
+                history.mark_handled(candidate_key, canonical, provider.provider_id)
             return SubscribeOutcome(SubscribeStatus.SUBSCRIPTION_EXISTS, item,
                                     reason="已订阅（预去重，跳过识别）")
 
         # 2. 已处理短路（本插件历史中的正向终态）：不识别、不记新历史。
-        if history.is_handled(identity):
+        exact_identity = candidate_is_exact or (item.type_hint is None and bool(item.douban_id or item.bangumi_id))
+        if ((candidate_is_exact and history.is_handled(candidate_key))
+                or (exact_identity and history.is_handled(identity))):
             return SubscribeOutcome(SubscribeStatus.ALREADY_HANDLED, item)
 
         # 3. pre 过滤（识别前）。被过滤者记录但不标记已处理 → 可被其他渠道/下一轮重试。
@@ -81,7 +95,6 @@ class SubscribeExecutor:
             return SubscribeOutcome(SubscribeStatus.FILTERED, item, reason=verdict.reason)
 
         # 4. 识别。
-        meta = MetaInfo(item.title)
         if item.year:
             meta.year = item.year
         if item.type_hint:
@@ -96,7 +109,21 @@ class SubscribeExecutor:
 
         # 识别成功后，用识别结果计算规范身份与订阅季（供记录合并与索引登记）。
         is_tv = mediainfo.type == MediaType.TV
+        # 宿主返回的媒体对象可能来自共享缓存，目标季/剧集组只能写入本次副本。
+        mediainfo = deepcopy(mediainfo)
         sub_season = item.season if item.season is not None else mediainfo.season
+        if is_tv and sub_season is None:
+            seasons = [number for number in (mediainfo.seasons or {}) if number > 0]
+            if len(seasons) == 1:
+                sub_season = seasons[0]
+            else:
+                reason = "未确定订阅季号，请手动确认目标季"
+                self._record(history, identity, provider, item, mediainfo, None,
+                             SubscribeStatus.UNRECOGNIZED, reason)
+                return SubscribeOutcome(SubscribeStatus.UNRECOGNIZED, item, mediainfo=mediainfo, reason=reason)
+        if is_tv:
+            meta.begin_season = sub_season
+            mediainfo.season = sub_season
         rid = self._identity(item, mediainfo, sub_season if is_tv else None)
         logger.debug(
             f"[{provider.provider_id}] 原始 名称={item.title!r} 年份={item.year or '-'} "
@@ -106,24 +133,30 @@ class SubscribeExecutor:
             f"tmdb={mediainfo.tmdb_id or '-'} 季={sub_season if is_tv else '-'}"
         )
 
+        # 原始榜单身份可能与宿主规范身份不同，识别后仍须查持久成功状态。
+        if history.is_handled(rid):
+            if candidate_is_exact:
+                history.mark_handled(candidate_key, rid, provider.provider_id)
+            return SubscribeOutcome(SubscribeStatus.ALREADY_HANDLED, item, mediainfo=mediainfo)
+
         # 5. post 过滤（识别后）。同样记录但不标记已处理。
         verdict = filter_chain.run("post", item, mediainfo, filters_config)
         if not verdict.accepted:
-            self._record(history, rid, provider, item, mediainfo, None,
+            self._record(history, rid, provider, item, mediainfo, sub_season if is_tv else None,
                          SubscribeStatus.FILTERED, verdict.reason)
             return SubscribeOutcome(SubscribeStatus.FILTERED, item, mediainfo=mediainfo, reason=verdict.reason)
 
-        # 6. 媒体库查重：get_no_exists_info 返回 True 表示已完整存在，应跳过。
+        # 6. 媒体库查重：未允许已有媒体时，完整存在的目标季才短路。
         exist_flag, _ = self.ctx.downloadchain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
-        if exist_flag:
-            self._record(history, rid, provider, item, mediainfo, None,
+        if exist_flag and not self.gcfg.exist_ok:
+            self._record(history, rid, provider, item, mediainfo, sub_season if is_tv else None,
                          SubscribeStatus.MEDIA_EXISTS, "媒体库已存在")
             self._mark_done(history, rid, mediainfo, sub_season if is_tv else None)
             return SubscribeOutcome(SubscribeStatus.MEDIA_EXISTS, item, mediainfo=mediainfo, reason="媒体库已存在")
 
         # 7. 订阅查重（保留：预去重只是快速路径，此处仍是最终安全网）。
         if self.ctx.subscribechain.exists(mediainfo=mediainfo, meta=meta):
-            self._record(history, rid, provider, item, mediainfo, None,
+            self._record(history, rid, provider, item, mediainfo, sub_season if is_tv else None,
                          SubscribeStatus.SUBSCRIPTION_EXISTS, "订阅已存在")
             self._mark_done(history, rid, mediainfo, sub_season if is_tv else None)
             return SubscribeOutcome(SubscribeStatus.SUBSCRIPTION_EXISTS, item, mediainfo=mediainfo, reason="订阅已存在")
@@ -189,6 +222,9 @@ class SubscribeExecutor:
             season = item.season
         record = HistoryRecord(
             unique=unique,
+            candidate_key=(item.candidate_key() if item.season is not None or
+                           (mediainfo and mediainfo.type == MediaType.MOVIE) else None),
+            source_item=item.to_dict(),
             provider=provider.provider_id,
             title=mediainfo.title if mediainfo else item.title,
             year=mediainfo.year if mediainfo else item.year,

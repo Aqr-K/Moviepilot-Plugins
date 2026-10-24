@@ -97,7 +97,8 @@ def test_filtered_post():
     outcome = _exec(ctx).process(item, _PROVIDER, chain, store, {"media_type": "movie"})
     assert outcome.status == SubscribeStatus.FILTERED
     assert outcome.reason == "非电影"
-    assert outcome.mediainfo is mi
+    assert outcome.mediainfo is not mi
+    assert outcome.mediainfo.title == mi.title
     # douban 识别分支
     assert ctx.chain.recognize_media.call_args.kwargs.get("doubanid") == "123"
     assert store.query()[0][0]["status"] == "filtered"
@@ -109,7 +110,7 @@ def test_media_exists():
     ctx.chain.recognize_media.return_value = _mediainfo(mtype=MediaType.MOVIE)
     ctx.downloadchain.get_no_exists_info.return_value = (True, {})  # True=已完整存在
     item = RankMediaItem(title="X", douban_id="123", unique_seed="s")
-    outcome = _exec(ctx).process(item, _PROVIDER, FilterChain([]), store, {})
+    outcome = _exec(ctx, GlobalConfig({"exist_ok": False})).process(item, _PROVIDER, FilterChain([]), store, {})
     assert outcome.status == SubscribeStatus.MEDIA_EXISTS
     ctx.subscribechain.exists.assert_not_called()
     rec = store.query()[0][0]

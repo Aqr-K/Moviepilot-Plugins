@@ -48,23 +48,23 @@ flowchart TD
     Dedup -->|命中| SAH["ALREADY_HANDLED<br/>(不记新历史)"]
     Dedup -->|未命中| Pre{"2. pre 过滤<br/>vote 前/year/popularity"}
 
-    Pre -->|reject| FPre["FILTERED (pre)<br/>记历史 + 标记 handled"]
+    Pre -->|reject| FPre["FILTERED (pre)<br/>记历史，不标记 handled"]
     Pre -->|accept| Reco{"3. 识别<br/>recognize_media(meta, media_source, media_id)"}
 
-    Reco -->|None| UR["UNRECOGNIZED<br/>记历史 + 标记 handled"]
+    Reco -->|None| UR["UNRECOGNIZED<br/>记历史，不标记 handled"]
     Reco -->|MediaInfo| Post{"4. post 过滤<br/>vote/media_type"}
 
-    Post -->|reject| FPost["FILTERED (post)<br/>记历史 + 标记 handled"]
+    Post -->|reject| FPost["FILTERED (post)<br/>记历史，不标记 handled"]
     Post -->|accept| Lib{"5. 媒体库查重<br/>get_no_exists_info -> exist_flag?"}
 
-    Lib -->|True 已完整存在| ME["MEDIA_EXISTS<br/>记历史 + 标记 handled"]
+    Lib -->|True 已完整存在| ME["MEDIA_EXISTS<br/>记历史；仅正向终态标记 handled"]
     Lib -->|False 有缺失| Sub{"6. 订阅查重<br/>subscribechain.exists?"}
 
-    Sub -->|True| SE["SUBSCRIPTION_EXISTS<br/>记历史 + 标记 handled"]
+    Sub -->|True| SE["SUBSCRIPTION_EXISTS<br/>记历史；仅正向终态标记 handled"]
     Sub -->|False| Add["7. 加订阅<br/>subscribechain.add(media_source, media_id, ...) -> (sid, err)"]
 
     Add -->|sid 有值| OK["SUBSCRIBED<br/>记历史(subscribe_id) + 标记 handled"]
-    Add -->|sid 为空| ERR["ERROR<br/>记历史(reason=err) + 标记 handled"]
+    Add -->|sid 为空| ERR["ERROR<br/>记历史(reason=err)，允许重试"]
 
     SAH --> Stats["8. 累加 stats[status]"]
     FPre --> Stats
@@ -82,7 +82,7 @@ flowchart TD
 要点：
 
 - **步骤严格按序**，任一步命中即短路返回对应状态，不再执行后续步骤。
-- **`get_no_exists_info` 语义反直觉**：返回 `True` 表示媒体库已「完整存在」（应跳过），`False` 表示有缺失（可订阅）。
+- **`get_no_exists_info` 语义反直觉**：返回 `True` 表示媒体库已「完整存在」（未允许已有媒体时跳过），`False` 表示有缺失（可订阅）。
 - 每条 item 都包在 `try/except` 内，单条异常 → `ERROR` 状态并 `continue`，不影响整源。
 - `ALREADY_HANDLED` 是唯一「不写新历史」的分支（该身份键已有正向终态记录）。
 - 历史按行写入并即时提交：两个来源同时运行、或用户在运行期间删记录，都不会互相覆盖。
@@ -94,8 +94,8 @@ flowchart TD
 传给宿主 `chain.recognize_media`，识别成功后再从 `MediaInfo` 取最终主身份，交给宿主
 `SubscribeChain.exists` 和 `SubscribeChain.add`；插件不再自行把来源 ID 映射成 TMDB。
 
-插件历史表只新增通用的 `media_source/media_id`（以及剧集组）字段；旧的三类 ID 列
-仅作存量兼容。AniList、IMDb、TVDB 或未来扩展来源不会再触发新的单源列/模型字段，
+插件媒体身份使用通用的 `media_source/media_id` 与剧集组；历史另存原始候选与精确候选键。
+旧的三类 ID 列仅作存量兼容。AniList、IMDb、TVDB 或未来扩展来源不会再触发新的单源列/模型字段，
 旧版单源列只在迁移时读取并回填到通用身份。
 
 `SubscribedIndex` 仅按宿主订阅行建立识别前的快速索引，支持内置及合法扩展来源，并
@@ -292,3 +292,11 @@ classDiagram
 - **历史重新识别**（`POST /history/recognize`）：对「异常 / 未识别」历史记录还原 `RankMediaItem`，复用落地管线单条重跑识别与订阅（如未上映、季度预告等暂无 TMDB/Bangumi 记录的条目）。
 </content>
 </invoke>
+
+## 目标季与成功事实
+
+标题季号在预去重前解析；未知季不匹配任意单季，识别后再次按规范身份检查成功状态。媒体对象复制后再填入目标季，避免污染宿主缓存。
+
+`subscribe_history` 保存展示记录和原始候选快照；`subscribe_handled` 保存规范身份与精确候选别名。未知季候选不绑定跨季别名。成功记录不被后续过滤/异常降级，展示修剪不删成功账本，显式删除或清空才解除对应处理状态。
+
+表结构初始化使用 engine 弱引用及共享锁；旧表按列补齐候选字段。KV 迁移必须先归档，部分写入失败保留待重试源，重跑不覆盖较新的数据库记录。

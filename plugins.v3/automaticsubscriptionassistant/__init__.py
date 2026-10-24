@@ -23,6 +23,7 @@ from app.schemas.types import EventType, MediaType
 from app.sdk.config import settings
 from app.sdk.events import eventmanager
 from app.sdk.logging import logger
+from app.sdk.scheduler import update_plugin_job
 
 from .core.config import PluginSettings, ProviderConfig, build_defaults
 from .core.dedup import SubscribedIndex, build_subscribed_index
@@ -56,7 +57,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.1.0"
+    plugin_version = "3.1.1"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -490,13 +491,19 @@ class AutomaticSubscriptionAssistant(_PluginBase):
         # 状态检测兜底：启用了却无任何可监听内容的来源，保存时自动关闭其开关（与前端一致，防绕过前端直接保存）。
         self._auto_disable_empty_providers(request)
         try:
-            self.update_config(request)
+            if self.update_config(request) is False:
+                return {"code": 1, "message": "配置保存失败，运行配置未变更"}
             # 重新装载：重建 settings/链/调度，并处理其中的一次性开关。
             self.init_plugin(request)
+            self._refresh_jobs()
             return {"code": 0, "message": "保存成功"}
         except Exception as exc:  # noqa: BLE001
             logger.error(f"{self.plugin_name}：保存配置失败: {exc}")
             return {"code": 1, "message": f"保存失败: {exc}"}
+
+    def _refresh_jobs(self) -> None:
+        """自定义保存入口同样刷新宿主定时任务，移除旧 cron 与停用来源。"""
+        update_plugin_job(self.__class__.__name__)
 
     def _auto_disable_empty_providers(self, request: dict) -> None:
         """状态检测兜底：遍历各来源，已启用却无任何可监听内容者（``provider.has_listening`` 为假）
@@ -737,6 +744,10 @@ class AutomaticSubscriptionAssistant(_PluginBase):
                 media_id=rec.get("media_id"),
                 episode_group=rec.get("episode_group"),
             )
+            if isinstance(rec.get("source_item"), dict):
+                item = RankMediaItem.from_dict(rec["source_item"])
+                if item.season is None and rec.get("season") is not None:
+                    item.season = rec["season"]
             context = ProviderContext(
                 chain=self.chain,
                 downloadchain=self._downloadchain,
@@ -747,13 +758,16 @@ class AutomaticSubscriptionAssistant(_PluginBase):
                 get_data=self.get_data,
                 save_data=self.save_data,
             )
-            # 先删旧记录：识别成功后身份键可能由标题回退键升级为强标识键，避免残留孤儿记录。
-            store.delete(unique)
+            # 先处理再移除旧键；存储或识别异常时仍保留原候选供重试。
             filter_chain = build_filter_chain([f.key for f in spec.filters_schema])
             executor = SubscribeExecutor(context, self._settings.global_config,
                                          self.__build_subscribed_index())
             outcome = executor.process(item, provider, filter_chain, store, pconf.filters)
             store.flush()
+            new_season = getattr(outcome.mediainfo, "season", None)
+            new_unique = executor._identity(outcome.item, outcome.mediainfo, new_season)
+            if new_unique != unique and store.get(new_unique) is not None:
+                store.delete(unique)
         except Exception as exc:  # noqa: BLE001 - 端点兜底，不影响插件本体
             logger.error(f"{self.plugin_name}：重新识别失败: {exc}")
             return {"code": 1, "message": f"重新识别失败: {exc}"}

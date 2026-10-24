@@ -94,7 +94,7 @@
             v-for="item in items"
             :key="item.unique"
             :poster="item.poster || ''"
-            :name="item.title || t('unknown')"
+            :name="mediaName(item)"
             :lines="cardLines(item)"
             :status="statusBadge(item)"
             :selectable="selectMode"
@@ -104,7 +104,7 @@
           >
             <template #actions>
               <v-list-item
-                v-if="item.status === 'error'"
+                v-if="['error', 'unrecognized'].includes(item.status)"
                 prepend-icon="mdi-refresh" :title="t('reRecognize')"
                 :disabled="recognizing.has(item.unique)"
                 @click="reRecognize(item)"
@@ -276,7 +276,7 @@ const MSG = {
     emptyNone: '暂无订阅历史记录', emptyNoneHint: '启用来源并运行后，这里会记录每次订阅结果',
     confirmTitle: '删除确认', confirmDeleteN: '确认删除选中的 {n} 条记录？', cancel: '取消', delete: '删除',
     unknown: '未知', go: '跳转', perPage: '每页行数', pageOptions: '每页行数与跳转', jumpLabel: '跳转到第几页（共 {n} 页）',
-    kType: '类型', kSource: '来源', kTime: '订阅时间', kYear: '发行年份',
+    kType: '类型', kGroup: '剧集组', kSource: '来源', kTime: '订阅时间', kYear: '发行年份',
     historyError: '获取历史记录失败：', deleteFailed: '删除失败：', apiUnavailable: 'API 不可用',
     reRecognize: '重新识别', recognizeFailed: '重新识别失败：', more: '更多',
     'st.subscribed': '已订阅', 'st.media_exists': '媒体库已存在', 'st.subscription_exists': '订阅已存在',
@@ -295,7 +295,7 @@ const MSG = {
     emptyNone: '暫無訂閱歷史記錄', emptyNoneHint: '啟用來源並執行後，這裡會記錄每次訂閱結果',
     confirmTitle: '刪除確認', confirmDeleteN: '確認刪除選中的 {n} 筆記錄？', cancel: '取消', delete: '刪除',
     unknown: '未知', go: '跳轉', perPage: '每頁筆數', pageOptions: '每頁筆數與跳轉', jumpLabel: '跳轉到第幾頁（共 {n} 頁）',
-    kType: '類型', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份',
+    kType: '類型', kGroup: '劇集組', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份',
     historyError: '取得歷史記錄失敗：', deleteFailed: '刪除失敗：', apiUnavailable: 'API 不可用',
     reRecognize: '重新識別', recognizeFailed: '重新識別失敗：', more: '更多',
     'st.subscribed': '已訂閱', 'st.media_exists': '媒體庫已存在', 'st.subscription_exists': '訂閱已存在',
@@ -314,7 +314,7 @@ const MSG = {
     emptyNone: 'No subscription history yet', emptyNoneHint: 'Once sources are enabled and run, results appear here',
     confirmTitle: 'Confirm delete', confirmDeleteN: 'Delete {n} selected record(s)?', cancel: 'Cancel', delete: 'Delete',
     unknown: 'Unknown', go: 'Go', perPage: 'Rows per page', pageOptions: 'Rows & jump', jumpLabel: 'Jump to page (of {n})',
-    kType: 'Type', kSource: 'Source', kTime: 'Time', kYear: 'Year',
+    kType: 'Type', kGroup: 'Episode group', kSource: 'Source', kTime: 'Time', kYear: 'Year',
     historyError: 'Failed to load history: ', deleteFailed: 'Delete failed: ', apiUnavailable: 'API unavailable',
     reRecognize: 'Re-identify', recognizeFailed: 'Re-identify failed: ', more: 'More',
     'st.subscribed': 'Subscribed', 'st.media_exists': 'In library', 'st.subscription_exists': 'Already subscribed',
@@ -438,6 +438,12 @@ function cssColor(name) {
 function statusBadge(item) {
   const m = statusMeta(item.status)
   return { label: statusLabel(item.status), color: cssColor(m.color), icon: m.icon }
+}
+function mediaName(item) {
+  const parts = [item.title || t('unknown')]
+  if (item.type === '电视剧' && item.season != null) parts.push(`S${String(item.season).padStart(2, '0')}`)
+  if (item.episode_group) parts.push(`${t('kGroup')}: ${item.episode_group}`)
+  return parts.join(' · ')
 }
 function cardLines(item) {
   return [
@@ -575,7 +581,8 @@ async function runDelete() {
   error.value = ''
   try {
     if (!props.api || typeof props.api.post !== 'function') throw new Error(t('apiUnavailable'))
-    await props.api.post(`${PLUGIN}/history/batch-delete`, { uniques: confirm.ids })
+    const res = await props.api.post(`${PLUGIN}/history/batch-delete`, { uniques: confirm.ids })
+    if (res?.code !== 0) throw new Error(res?.message || t('deleteFailed'))
     confirm.ids.forEach(u => selected.delete(u))
     confirm.open = false
     await fetchStatus()

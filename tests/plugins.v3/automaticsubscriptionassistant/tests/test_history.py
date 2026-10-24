@@ -42,6 +42,7 @@ def test_init_loads_handled_only_for_positive_status():
     assert store.is_handled("c") is False
     assert store.is_handled("d") is False
     assert store.is_handled("e") is False
+    assert store.is_handled(None) is False
 
 
 def test_init_empty_when_none():

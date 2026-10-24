@@ -294,18 +294,31 @@ class MaoyanRankProvider(RankProvider):
 
     @staticmethod
     def _year_from_release_info(release_info) -> Optional[str]:
-        """由 releaseInfo（距今天数）反推年份；缺失或解析失败返回 None。"""
-        if not release_info:
+        """解析上映日期或明确的相对天数；未知格式不猜年份。"""
+        value = str(release_info or "").strip()
+        if not value:
             return None
+        absolute = re.search(r"(19\d{2}|20\d{2})[-年/.](\d{1,2})[-月/.](\d{1,2})", value)
+        if absolute:
+            try:
+                return str(date(*(int(part) for part in absolute.groups())).year)
+            except ValueError:
+                return None
+        offsets = {"今天上映": 0, "今日上映": 0, "昨天上映": -1, "昨日上映": -1,
+                   "明天上映": 1, "明日上映": 1}
+        offset = offsets.get(value)
+        if offset is None:
+            past = re.fullmatch(r"(?:已上映|上映|已播出|播出|开播|点映)\s*(\d+)\s*天", value)
+            future = re.fullmatch(r"(\d+)\s*天后(?:上映|开播|播出)?", value)
+            until = re.fullmatch(r"(?:距|距离)(?:上映|开播|播出)(?:还有)?\s*(\d+)\s*天", value)
+            if past:
+                offset = -int(past.group(1))
+            elif future or until:
+                offset = int((future or until).group(1))
+            else:
+                return None
         try:
-            days = int("".join(re.findall(r"\d", str(release_info))))
-        except (ValueError, TypeError):
-            return None
-        if not str(release_info):
-            return None
-        try:
-            target = date.today() - timedelta(days=days)
-            return str(target.year)
+            return str((date.today() + timedelta(days=offset)).year)
         except (OverflowError, ValueError):
             return None
 

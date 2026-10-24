@@ -1,10 +1,11 @@
-"""历史存储：封装插件 KV 读写并维护去重集合。
+"""v2 历史存储：共享锁内读取最新 KV、按身份合并并立即提交。
 
-存储 key 固定 ``'history'``，值为 ``List[dict]``。构造时从 KV 载入并重建去重集合，
-写入内存后由 ``flush()`` 统一落盘，降低 KV 写频率。
+各运行任务不再保留全量快照，flush 不执行写入，避免旧任务覆盖另一来源或用户的删除。
+成功事实与候选别名存入独立键；只有显式删除历史才清除此身份的处理状态。
 """
 from __future__ import annotations
 
+from threading import RLock
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
 
 # 插件 KV 中历史记录的固定键。
 HISTORY_KEY = "history"
+HANDLED_KEY = "history_handled"
+_KV_LOCK = RLock()
 
 # 「已处理」正向终态：命中即可跨渠道/跨运行跳过识别。被过滤/未识别/异常者不入此集合，
 # 仍可被其他渠道或下一轮重试（避免漏订）。取值为 SubscribeStatus.value。
@@ -70,32 +73,52 @@ class HistoryStore:
     """历史记录仓库 + 去重键集合。"""
 
     def __init__(self, get_data, save_data, del_data):
-        # get_data/save_data/del_data 为 _PluginBase 的绑定方法。
-        self._records: List[dict] = list(get_data(HISTORY_KEY) or [])
-        self._handled = _handled_uniques(self._records)
+        """保存插件 KV 端口；所有实例在操作时读取最新状态。"""
+        self._get = get_data
         self._save = save_data
         self._del = del_data
 
-    def is_handled(self, key: str) -> bool:
-        """去重键是否已处理过（正向终态）。"""
-        return key in self._handled
+    def _read(self) -> List[dict]:
+        """读取当前历史副本，调用者不直接修改 KV 返回值。"""
+        return [dict(row) for row in (self._get(HISTORY_KEY) or []) if isinstance(row, dict)]
 
-    def mark_handled(self, key: str) -> None:
-        """标记去重键为已处理（由 executor 对正向终态显式调用）。"""
-        self._handled.add(key)
+    def is_handled(self, key: str) -> bool:
+        """查独立成功账本，兼容旧版仅存在于历史中的正向终态。"""
+        if not key:
+            return False
+        with _KV_LOCK:
+            if key in (self._get(HANDLED_KEY) or {}):
+                return True
+            return any(row.get("status") in HANDLED_STATUSES
+                       and key in (row.get("unique"), row.get("candidate_key"))
+                       for row in self._read())
+
+    def mark_handled(self, key: str, canonical: Optional[str] = None, provider: str = "") -> None:
+        """立即保存精确候选别名和规范身份。"""
+        if not key:
+            return
+        with _KV_LOCK:
+            handled = dict(self._get(HANDLED_KEY) or {})
+            handled.setdefault(key, {"canonical": canonical or key, "provider": provider})
+            self._save(HANDLED_KEY, handled)
 
     def record(self, rec: "HistoryRecord") -> None:
-        """写入一条记录：同 unique（媒体身份键）先移除旧的再追加，跨渠道自动合并为一条。
-
-        注意：本方法**不**修改已处理集合——是否「已处理」由 executor 依据终态显式
-        ``mark_handled``，以便被过滤/未识别的条目照常留一条但仍可被其他渠道重试。
-        """
-        self._records = [r for r in self._records if r.get("unique") != rec.unique]
-        self._records.append(rec.to_dict())
+        """合并最新记录并提交；首次成功记录不被后续结果覆盖。"""
+        with _KV_LOCK:
+            records = self._read()
+            existing = next((row for row in records if row.get("unique") == rec.unique), None)
+            if rec.status in HANDLED_STATUSES:
+                self.mark_handled(rec.unique, provider=rec.provider)
+                if rec.candidate_key:
+                    self.mark_handled(rec.candidate_key, rec.unique, rec.provider)
+            if existing and existing.get("status") in HANDLED_STATUSES:
+                return
+            records = [row for row in records if row.get("unique") != rec.unique]
+            records.append(rec.to_dict())
+            self._save(HISTORY_KEY, records)
 
     def flush(self) -> None:
-        """把内存记录整体落盘。"""
-        self._save(HISTORY_KEY, self._records)
+        """兼容旧调用点；写入已在各操作内提交，不再覆盖全量快照。"""
 
     def query(self, provider: Optional[str] = None, status: Optional[str] = None,
               mtype: Optional[str] = None, keyword: Optional[str] = None,
@@ -114,7 +137,7 @@ class HistoryStore:
         ymin = _to_int(year_min)
         ymax = _to_int(year_max)
         filtered = [
-            r for r in self._records
+            r for r in self._read()
             if (providers is None or r.get("provider") in providers)
             and (statuses is None or r.get("status") in statuses)
             and (mtypes is None or r.get("type") in mtypes)
@@ -130,48 +153,53 @@ class HistoryStore:
 
     def get(self, unique: str) -> Optional[dict]:
         """按 unique 取一条记录（未找到返回 None），供「重新识别」还原候选。"""
-        return next((r for r in self._records if r.get("unique") == unique), None)
+        return next((r for r in self._read() if r.get("unique") == unique), None)
+
+    def _forget(self, targets: set) -> None:
+        """在共享临界区内删除这些规范身份及其候选别名。"""
+        handled = dict(self._get(HANDLED_KEY) or {})
+        handled = {key: value for key, value in handled.items()
+                   if key not in targets and value.get("canonical") not in targets}
+        self._save(HANDLED_KEY, handled)
 
     def delete(self, unique: str) -> bool:
-        """删除指定 unique 的记录并落盘，同时从去重集合移除。"""
-        before = len(self._records)
-        self._records = [r for r in self._records if r.get("unique") != unique]
-        removed = len(self._records) != before
-        self._handled.discard(unique)
-        if removed:
-            self.flush()
-        return removed
+        """删除最新历史与对应成功事实，不恢复其他任务持有的旧数据。"""
+        return bool(self.delete_many([unique]))
 
     def delete_many(self, uniques) -> int:
-        """批量删除多条记录，仅一次落盘。返回实际删除条数。"""
-        targets = {u for u in (uniques or []) if u}
-        if not targets:
-            return 0
-        before = len(self._records)
-        self._records = [r for r in self._records if r.get("unique") not in targets]
-        removed = before - len(self._records)
-        self._handled -= targets
-        if removed:
-            self.flush()
-        return removed
+        """一次临界区内合并批量删除，并清除候选映射。"""
+        targets = {key for key in (uniques or []) if key}
+        with _KV_LOCK:
+            records = self._read()
+            remaining = [row for row in records if row.get("unique") not in targets]
+            self._forget(targets)
+            if len(remaining) != len(records):
+                self._save(HISTORY_KEY, remaining)
+            return len(records) - len(remaining)
 
     def clear(self, provider: Optional[str] = None) -> None:
-        """清空全部或某来源的历史，并落盘。"""
-        if provider is None:
-            self._records = []
-            self._handled = set()
-        else:
-            self._records = [r for r in self._records if r.get("provider") != provider]
-            self._handled = _handled_uniques(self._records)
-        self.flush()
+        """显式清空历史同时解除对应成功状态。"""
+        with _KV_LOCK:
+            if provider is None:
+                self._save(HISTORY_KEY, [])
+                self._save(HANDLED_KEY, {})
+                return
+            records = self._read()
+            targets = {row.get("unique") for row in records if row.get("provider") == provider}
+            handled = self._get(HANDLED_KEY) or {}
+            targets.update(value.get("canonical") for value in handled.values()
+                           if value.get("provider") == provider)
+            self._forget(targets)
+            self._save(HISTORY_KEY, [row for row in records if row.get("provider") != provider])
 
     def stats(self) -> dict:
         """统计各 provider / 各 status 计数。"""
         by_provider: dict = {}
         by_status: dict = {}
-        for r in self._records:
+        records = self._read()
+        for r in records:
             provider = r.get("provider") or "unknown"
             status = r.get("status") or "unknown"
             by_provider[provider] = by_provider.get(provider, 0) + 1
             by_status[status] = by_status.get(status, 0) + 1
-        return {"total": len(self._records), "by_provider": by_provider, "by_status": by_status}
+        return {"total": len(records), "by_provider": by_provider, "by_status": by_status}

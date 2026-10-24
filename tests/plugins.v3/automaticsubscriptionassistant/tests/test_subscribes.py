@@ -55,7 +55,7 @@ def test_delete_calls_oper_and_callback():
     oper = _oper([_sub(1), _sub(2)])
     mgr = SubscribeManager(oper, on_deleted=lambda sid, sub: deleted.append((sid, sub.name)))
     res = mgr.delete([1, 2])
-    assert res == {"ok": 2, "failed": 0}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 2, "failed": 0}
     assert oper.delete.call_count == 2
     assert deleted == [(1, "沙丘"), (2, "沙丘")]
 
@@ -64,7 +64,7 @@ def test_delete_skips_missing_and_counts_failed():
     oper = _oper([_sub(1)])
     mgr = SubscribeManager(oper)
     res = mgr.delete([1, 999])  # 999 不存在
-    assert res == {"ok": 1, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 1, "failed": 1}
     oper.delete.assert_called_once_with(1)
 
 
@@ -74,14 +74,14 @@ def test_delete_tolerates_callback_error():
     oper.delete.side_effect = [None, RuntimeError("boom")]
     mgr = SubscribeManager(oper, on_deleted=lambda sid, sub: None)
     res = mgr.delete([1, 2])
-    assert res == {"ok": 1, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 1, "failed": 1}
 
 
 def test_set_state_updates_each():
     oper = _oper([_sub(1), _sub(2)])
     mgr = SubscribeManager(oper)
     res = mgr.set_state([1, 2], "S")
-    assert res == {"ok": 2, "failed": 0}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 2, "failed": 0}
     assert oper.update.call_count == 2
     oper.update.assert_any_call(1, {"state": "S"})
 
@@ -93,7 +93,7 @@ def test_delete_refuses_subscription_of_other_owner():
     oper = _oper([other])
     mgr = SubscribeManager(oper)
     res = mgr.delete([7])
-    assert res == {"ok": 0, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 0, "failed": 1}
     oper.delete.assert_not_called()
 
 
@@ -103,7 +103,7 @@ def test_set_state_refuses_subscription_of_other_owner():
     oper = _oper([other])
     mgr = SubscribeManager(oper)
     res = mgr.set_state([7], "S")
-    assert res == {"ok": 0, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 0, "failed": 1}
     oper.update.assert_not_called()
 
 
@@ -112,7 +112,7 @@ def test_set_state_counts_missing_as_failed():
     oper = _oper([_sub(1)])
     mgr = SubscribeManager(oper)
     res = mgr.set_state([1, 999], "S")
-    assert res == {"ok": 1, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 1, "failed": 1}
     oper.update.assert_called_once_with(1, {"state": "S"})
 
 
@@ -122,7 +122,7 @@ def test_manager_honours_configured_username():
     sub.username = "我的助手"
     oper = _oper([sub])
     mgr = SubscribeManager(oper, username="我的助手")
-    assert mgr.delete([1]) == {"ok": 1, "failed": 0}
+    assert mgr.delete([1]) == {"ok": 1, "failed": 0, "ok_ids": [1], "failed_ids": []}
     oper.list_by_username.return_value = [sub]
     assert mgr.list_mine()[0]["id"] == 1
     oper.list_by_username.assert_called_with("我的助手")
@@ -139,7 +139,15 @@ def test_set_state_rejects_invalid_state():
 def test_empty_ids_noop():
     oper = _oper([_sub(1)])
     mgr = SubscribeManager(oper)
-    assert mgr.delete([]) == {"ok": 0, "failed": 0}
-    assert mgr.set_state([], "R") == {"ok": 0, "failed": 0}
+    assert mgr.delete([]) == {"ok": 0, "failed": 0, "ok_ids": [], "failed_ids": []}
+    assert mgr.set_state([], "R") == {"ok": 0, "failed": 0, "ok_ids": [], "failed_ids": []}
     oper.delete.assert_not_called()
     oper.update.assert_not_called()
+
+
+def test_partial_failure_identifies_retry_targets():
+    """客户端可仅保留失败项，精确重试而不重复操作成功项。"""
+    oper = _oper([_sub(1)])
+    result = SubscribeManager(oper).delete([1, 999])
+    assert result["ok_ids"] == [1]
+    assert result["failed_ids"] == [999]

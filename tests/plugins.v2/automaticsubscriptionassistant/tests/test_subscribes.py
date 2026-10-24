@@ -48,7 +48,7 @@ def test_delete_calls_oper_and_callback():
     oper = _oper([_sub(1), _sub(2)])
     mgr = SubscribeManager(oper, on_deleted=lambda sid, sub: deleted.append((sid, sub.name)))
     res = mgr.delete([1, 2])
-    assert res == {"ok": 2, "failed": 0}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 2, "failed": 0}
     assert oper.delete.call_count == 2
     assert deleted == [(1, "沙丘"), (2, "沙丘")]
 
@@ -57,7 +57,7 @@ def test_delete_skips_missing_and_counts_failed():
     oper = _oper([_sub(1)])
     mgr = SubscribeManager(oper)
     res = mgr.delete([1, 999])  # 999 不存在
-    assert res == {"ok": 1, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 1, "failed": 1}
     oper.delete.assert_called_once_with(1)
 
 
@@ -67,14 +67,14 @@ def test_delete_tolerates_callback_error():
     oper.delete.side_effect = [None, RuntimeError("boom")]
     mgr = SubscribeManager(oper, on_deleted=lambda sid, sub: None)
     res = mgr.delete([1, 2])
-    assert res == {"ok": 1, "failed": 1}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 1, "failed": 1}
 
 
 def test_set_state_updates_each():
     oper = _oper([_sub(1), _sub(2)])
     mgr = SubscribeManager(oper)
     res = mgr.set_state([1, 2], "S")
-    assert res == {"ok": 2, "failed": 0}
+    assert {key: res[key] for key in ("ok", "failed")} == {"ok": 2, "failed": 0}
     assert oper.update.call_count == 2
     oper.update.assert_any_call(1, {"state": "S"})
 
@@ -90,7 +90,15 @@ def test_set_state_rejects_invalid_state():
 def test_empty_ids_noop():
     oper = _oper([_sub(1)])
     mgr = SubscribeManager(oper)
-    assert mgr.delete([]) == {"ok": 0, "failed": 0}
-    assert mgr.set_state([], "R") == {"ok": 0, "failed": 0}
+    assert mgr.delete([]) == {"ok": 0, "failed": 0, "ok_ids": [], "failed_ids": []}
+    assert mgr.set_state([], "R") == {"ok": 0, "failed": 0, "ok_ids": [], "failed_ids": []}
     oper.delete.assert_not_called()
     oper.update.assert_not_called()
+
+
+def test_partial_failure_identifies_retry_targets():
+    """客户端可仅保留失败项，精确重试而不重复操作成功项。"""
+    oper = _oper([_sub(1)])
+    result = SubscribeManager(oper).delete([1, 999])
+    assert result["ok_ids"] == [1]
+    assert result["failed_ids"] == [999]

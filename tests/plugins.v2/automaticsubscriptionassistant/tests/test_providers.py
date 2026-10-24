@@ -133,7 +133,7 @@ def _maoyan_payload(url):
     return {}
 
 
-def test_maoyan_fetch_parses_three_endpoints(monkeypatch):
+def test_maoyan_fetch_ignores_retired_endpoint(monkeypatch):
     monkeypatch.setattr(PlaywrightHelper, "action", lambda self, *a, **k: {})  # 无 Cookie 降级
     monkeypatch.setattr(RequestUtils, "get_res",
                         lambda self, url, *a, **k: SimpleNamespace(json=lambda: _maoyan_payload(url)))
@@ -150,10 +150,8 @@ def test_maoyan_fetch_parses_three_endpoints(monkeypatch):
     assert mv.year == exp_movie_year
     assert mv.unique_seed == f"电影_电影A_{exp_movie_year}"
 
-    nb = by["网大B"]
-    assert nb.type_hint == MediaType.MOVIE
-    assert nb.year is None          # releaseInfo 缺失 -> None
-    assert nb.source_meta["platformDesc"] == "某平台"
+    # 网络电影已从来源能力中移除，旧选项也不能重新启用停更端点。
+    assert "网大B" not in by
 
     exp_tv_year = str((date.today() - timedelta(days=100)).year)
     tv = by["剧C"]
@@ -265,7 +263,7 @@ def test_popular_fetch_maps_movie_and_tv(monkeypatch):
     # 未知类型（type=weird）被跳过 -> movie + tv = 2
     assert len(items) == 2
     # 各类型独立 count；未选风格/评分 -> genre_id、min_rating 均为 None
-    assert calls == [("movie", 5, None, None), ("tv", 7, None, None)]
+    assert calls == [(MediaType.MOVIE.value, 5, None, None), (MediaType.TV.value, 7, None, None)]
 
     by_cat = {i.source_meta["category"]: i for i in items}
     assert "anime" not in by_cat
@@ -308,7 +306,7 @@ def test_popular_fetch_genre_fanout(monkeypatch):
          "movie_genres": ["16", "878"], "movie_page_cnt": 5}, None))
 
     # 逐 genre 各请求一次
-    assert calls == [("movie", 16), ("movie", 878)]
+    assert calls == [(MediaType.MOVIE.value, 16), (MediaType.MOVIE.value, 878)]
     # 电影X(100) 在两个 genre 里都出现 -> 去重后只一条；共 3 条(100/101/102)
     assert len(items) == 3
     assert {i.unique_seed for i in items} == {"电影X:100", "动画A:101", "科幻B:102"}
@@ -317,26 +315,26 @@ def test_popular_fetch_genre_fanout(monkeypatch):
     assert x.source_meta["genre_id"] == 16
 
 
-def test_popular_fetch_min_rating_passthrough(monkeypatch):
-    """每类型独立 min_rating 下推服务端；0/未设视为不限（None）。"""
+def test_popular_fetch_rating_filters_locally(monkeypatch):
+    """评分本地过滤，服务端请求保持中文类型和无评分的共享缓存口径。"""
     calls = []
 
-    def _fake(stype, page=1, count=30, genre_id=None, min_rating=None, **kw):
+    def fake(stype, page=1, count=30, genre_id=None, min_rating=None, **kwargs):
+        """同一榜单包含高低分候选。"""
         calls.append((stype, min_rating))
-        return [_stat_movie()] if stype == "movie" else [_stat_tv()]
+        row = _stat_movie() if stype == MediaType.MOVIE.value else _stat_tv()
+        return [row, {**row, "name": "低评分", "vote": 2}]
 
-    monkeypatch.setattr(MoviePilotServerHelper, "get_subscribe_statistic", _fake)
-
-    # 电影设 7.5、剧集不设 -> 各自独立：movie=7.5, tv=None
-    list(PopularRankProvider().fetch(
-        {"movie_enabled": True, "tv_enabled": True, "movie_min_rating": 7.5}, None))
-    assert calls == [("movie", 7.5), ("tv", None)]
-
+    monkeypatch.setattr(MoviePilotServerHelper, "get_subscribe_statistic", fake)
+    items = list(PopularRankProvider().fetch({"movie_enabled": True, "tv_enabled": False,
+                                            "movie_min_rating": 7.5}, None))
+    assert calls == [(MediaType.MOVIE.value, None)]
+    assert [item.title for item in items] == ["电影X"]
     calls.clear()
-    # 0 视为不限 -> None
-    list(PopularRankProvider().fetch(
-        {"movie_enabled": True, "tv_enabled": False, "movie_min_rating": 0}, None))
-    assert calls == [("movie", None)]
+    items = list(PopularRankProvider().fetch({"movie_enabled": True, "tv_enabled": False,
+                                            "movie_min_rating": 0}, None))
+    assert calls == [(MediaType.MOVIE.value, None)]
+    assert {item.title for item in items} == {"电影X", "低评分"}
 
 
 def test_popular_spec_has_genre_and_rating_fields():
@@ -373,14 +371,14 @@ def test_popular_enable_switches(monkeypatch):
 
     def _fake(stype, page=1, count=30, genre_id=None, min_rating=None, **kw):
         calls.append(stype)
-        return [_stat_movie()] if stype == "movie" else [_stat_tv()]
+        return [_stat_movie()] if stype == MediaType.MOVIE.value else [_stat_tv()]
 
     monkeypatch.setattr(MoviePilotServerHelper, "get_subscribe_statistic", _fake)
 
     # 仅开电影
     items = list(PopularRankProvider().fetch(
         {"movie_enabled": True, "tv_enabled": False}, None))
-    assert calls == ["movie"]
+    assert calls == [MediaType.MOVIE.value]
     assert [i.source_meta["category"] for i in items] == ["movie"]
 
     # 两个都关 -> 不拉取
@@ -413,13 +411,15 @@ def test_popular_legacy_page_cnt_fallback(monkeypatch):
         return []
 
     monkeypatch.setattr(MoviePilotServerHelper, "get_subscribe_statistic", _fake)
+    monkeypatch.setattr(PopularRankProvider, "_log_empty", lambda *args: None)
     list(PopularRankProvider().fetch({"categories": ["movie", "tv"], "page_cnt": 9}, None))
-    assert calls == [("movie", 9), ("tv", 9)]
+    assert calls == [(MediaType.MOVIE.value, 9), (MediaType.TV.value, 9)]
 
 
 def test_popular_empty_statistic(monkeypatch):
     monkeypatch.setattr(MoviePilotServerHelper, "get_subscribe_statistic",
                         lambda stype, page=1, count=30, **kw: [])
+    monkeypatch.setattr(PopularRankProvider, "_log_empty", lambda *args: None)
     items = list(PopularRankProvider().fetch({"categories": ["movie"], "page_cnt": 5}, None))
     assert items == []
 
@@ -506,11 +506,11 @@ NETFLIX_ALL_WEEKS_COUNTRIES = _tsv(
 def _netflix_get_res(_self, url, *a, **k):
     """按 URL 路由到对应 mini TSV 样本，模拟 RequestUtils.get_res（零真实出站）。"""
     if url == netflix_mod.MOST_POPULAR_URL:
-        return SimpleNamespace(text=NETFLIX_MOST_POPULAR)
+        return SimpleNamespace(text=NETFLIX_MOST_POPULAR, content=NETFLIX_MOST_POPULAR.encode("utf-8"))
     if url == netflix_mod.ALL_WEEKS_GLOBAL_URL:
-        return SimpleNamespace(text=NETFLIX_ALL_WEEKS_GLOBAL)
+        return SimpleNamespace(text=NETFLIX_ALL_WEEKS_GLOBAL, content=NETFLIX_ALL_WEEKS_GLOBAL.encode("utf-8"))
     if url == netflix_mod.ALL_WEEKS_COUNTRIES_URL:
-        return SimpleNamespace(text=NETFLIX_ALL_WEEKS_COUNTRIES)
+        return SimpleNamespace(text=NETFLIX_ALL_WEEKS_COUNTRIES, content=NETFLIX_ALL_WEEKS_COUNTRIES.encode("utf-8"))
     return None
 
 
@@ -521,7 +521,7 @@ def test_netflix_spec_shape():
     assert spec.filters_schema == []
     opts = {f.key: f for f in spec.options_schema}
     assert set(opts) == {"global", "global_dataset", "global_media_types",
-                         "countries", "country_media_types", "limit", "proxy",
+                         "country_selections", "limit", "proxy",
                          "rich_metadata", "max_workers", "use_cache"}
     assert opts["global"].default is True
     assert opts["limit"].default == 10
@@ -529,10 +529,10 @@ def test_netflix_spec_shape():
     assert len(opts["global_media_types"].options) == 4
     assert opts["global_media_types"].default == [
         "Films (English)", "Films (Non-English)", "TV (English)", "TV (Non-English)"]
-    assert len(opts["country_media_types"].options) == 2
-    assert opts["country_media_types"].default == ["Films", "TV"]
-    assert opts["countries"].default == []
-    assert len(opts["countries"].options) == 94  # 实测 94 个上榜国家/地区
+    assert opts["country_selections"].kind == "region-media-map"
+    assert len(opts["country_selections"].columns) == 2
+    assert opts["country_selections"].default == {}
+    assert len(opts["country_selections"].options) == 94
     # 富元数据模式新增两项：默认关、并发数默认 5 且归入高级选项。
     assert opts["rich_metadata"].kind == "switch"
     assert opts["rich_metadata"].default is False
@@ -563,7 +563,7 @@ def test_netflix_global_most_popular_types_and_limit(monkeypatch):
     # TV (English) 取前 2（ShowA/ShowB）。
     assert by["ShowA"].type_hint == MediaType.TV
     assert by["ShowA"].season == 1                    # "ShowA: Season 1"
-    assert by["ShowA"].unique_seed == "tv_ShowA"
+    assert by["ShowA"].unique_seed == "tv_ShowA:s1"
     assert by["ShowB"].season is None                 # "Limited Series" 无 Season
     # 每类各 2 条，共 4 条。
     assert len(items) == 4
@@ -799,7 +799,7 @@ def test_netflix_cache_key_ignores_workers_and_use_cache():
     assert k1 == k2
     # 结果相关选项变化 -> 键变。
     assert NetflixRankProvider._cache_key(dict(base, limit=3)) != k1
-    assert NetflixRankProvider._cache_key(dict(base, countries=["AR"])) != k1
+    assert NetflixRankProvider._cache_key(dict(base, country_selections={"AR": ["Films"]})) != k1
 
 
 # ---------- 奈飞两级缓存 L2（持久化插件 KV，抗重启）----------
@@ -1022,7 +1022,7 @@ def test_netflix_rich_country_uses_clean_title_year_season(monkeypatch):
     assert a.source_meta["scope"] == "TW"
     assert a.source_meta["source"] == "rich"
     assert a.source_meta["video_id"] == 81900130
-    assert a.unique_seed == "tv_As You Stood By"
+    assert a.unique_seed == "tv_As You Stood By:sNone"
     assert by["Love's Ambition"].season == 1        # "Love's Ambition: Season 1"
 
 
@@ -1110,13 +1110,13 @@ def test_netflix_rich_non_english_global_falls_back_to_tsv(monkeypatch):
     def _router(_self, url, *a, **k):
         if url == f"{base}/films":
             return SimpleNamespace(text=eng_films)
-        if url == netflix_mod.MOST_POPULAR_URL:
-            return SimpleNamespace(text=ne_tsv)
+        if url == netflix_mod.ALL_WEEKS_GLOBAL_URL:
+            return SimpleNamespace(text=ne_tsv, content=ne_tsv.encode("utf-8"))
         return None
 
     monkeypatch.setattr(RequestUtils, "get_res", _router)
     items = list(NetflixRankProvider().fetch(
-        {"rich_metadata": True, "global": True, "global_dataset": "most-popular",
+        {"rich_metadata": True, "global": True, "global_dataset": "all-weeks-global",
          "global_media_types": ["Films (English)", "Films (Non-English)"],
          "countries": [], "limit": 10}, None))
     by = {i.title: i for i in items}
@@ -1172,7 +1172,7 @@ def test_netflix_rich_static_helpers():
     assert NetflixRankProvider._to_optional_int("bad") is None
     tasks = NetflixRankProvider._build_rich_tasks(
         ["Films (English)", "Films (Non-English)", "TV (English)"],
-        ["KR"], ["Films", "TV"])
+        {"KR": ["Films", "TV"]})
     urls = [t["url"] for t in tasks]
     base = netflix_mod._TUDUM_TOP10_BASE
     # 英语两类各 1 页（非英语不进富页任务），韩国 × 2 类各 1 页。

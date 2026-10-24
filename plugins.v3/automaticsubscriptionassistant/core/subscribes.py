@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # 允许的订阅状态：R=订阅中/恢复，P=待定，S=暂停（与主程序 subscribe 状态一致）。
 VALID_STATES = ("R", "P", "S")
@@ -48,28 +48,33 @@ class SubscribeManager:
             return None
         return sub
 
-    def delete(self, ids) -> Dict[str, int]:
+    def delete(self, ids) -> Dict[str, Any]:
         """批量退订本插件的订阅：逐条删除并回调发事件。返回 {"ok","failed"}。
 
         不属于本插件的 ID 计入 failed，不会被删除。单条异常同样计入 failed。
         """
         ok = 0
         failed = 0
+        ok_ids = []
+        failed_ids = []
         for sid in ids or []:
             try:
                 sub = self._owned(sid)
                 if sub is None:
                     failed += 1
+                    failed_ids.append(sid)
                     continue
                 self.oper.delete(sid)
                 if self.on_deleted:
                     self.on_deleted(sid, sub)
                 ok += 1
+                ok_ids.append(sid)
             except Exception:  # noqa: BLE001 - 单条失败不中断整体
                 failed += 1
-        return {"ok": ok, "failed": failed}
+                failed_ids.append(sid)
+        return {"ok": ok, "failed": failed, "ok_ids": ok_ids, "failed_ids": failed_ids}
 
-    def set_state(self, ids, state: str) -> Dict[str, int]:
+    def set_state(self, ids, state: str) -> Dict[str, Any]:
         """批量置本插件订阅的状态（R/P/S）。非法状态抛 ValueError。返回 {"ok","failed"}。
 
         不属于本插件的 ID 计入 failed，不会被改动；``oper.update`` 对不存在的 ID
@@ -79,16 +84,21 @@ class SubscribeManager:
             raise ValueError(f"非法订阅状态: {state}（允许 {VALID_STATES}）")
         ok = 0
         failed = 0
+        ok_ids = []
+        failed_ids = []
         for sid in ids or []:
             try:
                 if self._owned(sid) is None:
                     failed += 1
+                    failed_ids.append(sid)
                     continue
                 self.oper.update(sid, {"state": state})
                 ok += 1
+                ok_ids.append(sid)
             except Exception:  # noqa: BLE001 - 单条失败不中断整体
                 failed += 1
-        return {"ok": ok, "failed": failed}
+                failed_ids.append(sid)
+        return {"ok": ok, "failed": failed, "ok_ids": ok_ids, "failed_ids": failed_ids}
 
     @staticmethod
     def _to_dict(sub) -> dict:

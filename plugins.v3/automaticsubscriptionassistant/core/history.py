@@ -11,13 +11,15 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from threading import RLock
 from typing import TYPE_CHECKING, List, Optional, Tuple
+from weakref import WeakSet
 
 from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from .models import _legacy_source_identity, _normalize_media_identity
-from .tables import Base, SubscribeHistory
+from .tables import Base, SubscribeHandled, SubscribeHistory
 
 if TYPE_CHECKING:
     from .models import HistoryRecord
@@ -33,7 +35,10 @@ HANDLED_STATUSES = frozenset({"subscribed", "media_exists", "subscription_exists
 MAX_PAGE_SIZE = 500
 
 # 已确保建过表的 engine，避免每次构造都往数据库发一轮存在性检查。
-_PREPARED_ENGINES: set = set()
+_PREPARED_ENGINES: WeakSet = WeakSet()
+_SCHEMA_LOCK = RLock()
+# 同进程各来源与 API 的读改写共享临界区，防止终态降级和首次插入竞争。
+_WRITE_LOCK = RLock()
 
 
 def _multi(value) -> Optional[set]:
@@ -72,12 +77,12 @@ def ensure_schema(engine) -> None:
 
     :param engine: 插件自有库的 engine
     """
-    key = id(engine)
-    if key in _PREPARED_ENGINES:
-        return
-    Base.metadata.create_all(engine, checkfirst=True)
-    _migrate_history_columns(engine)
-    _PREPARED_ENGINES.add(key)
+    with _SCHEMA_LOCK:
+        if engine in _PREPARED_ENGINES:
+            return
+        Base.metadata.create_all(engine, checkfirst=True)
+        _migrate_history_columns(engine)
+        _PREPARED_ENGINES.add(engine)
 
 
 def _migrate_history_columns(engine) -> None:
@@ -159,19 +164,16 @@ class HistoryStore:
         :param session_factory: 无参可调用，每次返回一个新的 SQLAlchemy 会话
         """
         self._session_factory = session_factory
-        # 本实例内显式标记过的身份键。正向终态本身由记录的 status 表达，此集合只覆盖
-        # 「标记了但还没落一条记录」的调用顺序，不承担持久化职责。
-        self._marked: set = set()
         self._schema_ready = False
 
     @contextmanager
     def _session(self):
         """开一个会话，正常结束即提交，异常回滚，最后必定关闭。"""
         session = self._session_factory()
-        if not self._schema_ready:
-            ensure_schema(session.get_bind())
-            self._schema_ready = True
         try:
+            if not self._schema_ready:
+                ensure_schema(session.get_bind())
+                self._schema_ready = True
             yield session
             session.commit()
         except Exception:
@@ -184,9 +186,9 @@ class HistoryStore:
         """去重键是否已处理过（正向终态）。"""
         if not key:
             return False
-        if key in self._marked:
-            return True
         with self._session() as session:
+            if session.get(SubscribeHandled, key) is not None:
+                return True
             return bool(session.query(
                 session.query(SubscribeHistory)
                 .filter(SubscribeHistory.unique == key,
@@ -194,35 +196,52 @@ class HistoryStore:
                 .exists()
             ).scalar())
 
-    def mark_handled(self, key: str) -> None:
-        """标记去重键为已处理（由 executor 对正向终态显式调用）。"""
-        if key:
-            self._marked.add(key)
+    def mark_handled(self, key: str, canonical: Optional[str] = None, provider: str = "") -> None:
+        """持久登记精确候选到规范身份的别名，兼容旧的单键调用。"""
+        if not key:
+            return
+        with _WRITE_LOCK, self._session() as session:
+            self._remember(session, key, canonical or key, provider)
+
+    @staticmethod
+    def _remember(session, key: str, canonical: str, provider: str) -> None:
+        """在当前事务内登记成功事实，重复登记保留首次归属。"""
+        if session.get(SubscribeHandled, key) is None:
+            session.add(SubscribeHandled(key=key, canonical=canonical, provider=provider))
 
     def record(self, rec: "HistoryRecord") -> None:
         """写入一条记录：同 unique（媒体身份键）覆盖旧的，跨渠道自动合并为一条。
 
-        注意：本方法**不**影响是否「已处理」的判定——那取决于记录的 ``status``，
-        以便被过滤/未识别的条目照常留一条但仍可被其他渠道重试。
+        正向终态与候选别名在同一事务内写入独立账本；已有成功记录不降级。
+        被过滤、未识别和异常不新增成功事实，仍可由其他来源或下一轮重试。
         """
         values = rec.to_dict()
         values["year_num"] = _to_int(values.get("year"))
-        try:
-            with self._session() as session:
-                self._upsert(session, values)
-        except IntegrityError:
-            # 另一个并发写入抢先插入了同一 unique，改按更新重试一次。
-            with self._session() as session:
-                self._upsert(session, values)
+        with _WRITE_LOCK:
+            try:
+                with self._session() as session:
+                    self._upsert(session, values)
+            except IntegrityError:
+                # 另一个进程抢先插入相同身份时，重新读取后再合并一次。
+                with self._session() as session:
+                    self._upsert(session, values)
 
-    @staticmethod
-    def _upsert(session, values: dict) -> None:
+    @classmethod
+    def _upsert(cls, session, values: dict) -> None:
         """按 unique 插入或更新一行。"""
         row = (session.query(SubscribeHistory)
                .filter(SubscribeHistory.unique == values["unique"])
                .one_or_none())
+        positive = values["status"] in HANDLED_STATUSES
+        if positive:
+            cls._remember(session, values["unique"], values["unique"], values["provider"])
+            if values.get("candidate_key"):
+                cls._remember(session, values["candidate_key"], values["unique"], values["provider"])
         if row is None:
             session.add(SubscribeHistory(**values))
+            return
+        if row.status in HANDLED_STATUSES:
+            # 成功事实与首次归属不被后续来源的过滤、异常或预去重结果覆盖。
             return
         for field, value in values.items():
             setattr(row, field, value)
@@ -305,8 +324,9 @@ class HistoryStore:
         """删除指定 unique 的记录。"""
         if not unique:
             return False
-        self._marked.discard(unique)
-        with self._session() as session:
+        with _WRITE_LOCK, self._session() as session:
+            session.query(SubscribeHandled).filter(
+                SubscribeHandled.canonical == unique).delete(synchronize_session=False)
             removed = (session.query(SubscribeHistory)
                        .filter(SubscribeHistory.unique == unique)
                        .delete(synchronize_session=False))
@@ -317,19 +337,25 @@ class HistoryStore:
         targets = {u for u in (uniques or []) if u}
         if not targets:
             return 0
-        self._marked -= targets
-        with self._session() as session:
+        with _WRITE_LOCK, self._session() as session:
+            session.query(SubscribeHandled).filter(
+                SubscribeHandled.canonical.in_(tuple(targets))).delete(synchronize_session=False)
             return (session.query(SubscribeHistory)
                     .filter(SubscribeHistory.unique.in_(tuple(targets)))
                     .delete(synchronize_session=False))
 
     def clear(self, provider: Optional[str] = None) -> None:
         """清空全部或某来源的历史。"""
-        self._marked = set()
-        with self._session() as session:
+        with _WRITE_LOCK, self._session() as session:
             query = session.query(SubscribeHistory)
+            handled = session.query(SubscribeHandled)
             if provider is not None:
                 query = query.filter(SubscribeHistory.provider == provider)
+                targets = {row.unique for row in query.all()}
+                targets.update(row.canonical for row in handled.filter(
+                    SubscribeHandled.provider == provider).all())
+                handled = handled.filter(SubscribeHandled.canonical.in_(tuple(targets)))
+            handled.delete(synchronize_session=False)
             query.delete(synchronize_session=False)
 
     def stats(self) -> dict:
@@ -365,7 +391,13 @@ class HistoryStore:
         keep = _to_int(keep) or 0
         if keep <= 0:
             return 0
-        with self._session() as session:
+        with _WRITE_LOCK, self._session() as session:
+            # 修剪只影响展示记录；把旧版本尚未迁入账本的成功事实一起保留下来。
+            for row in session.query(SubscribeHistory).filter(
+                    SubscribeHistory.status.in_(tuple(HANDLED_STATUSES))).all():
+                self._remember(session, row.unique, row.unique, row.provider)
+                if row.candidate_key:
+                    self._remember(session, row.candidate_key, row.unique, row.provider)
             kept = [row.id for row in
                     session.query(SubscribeHistory.id)
                     .order_by(SubscribeHistory.time.desc(),
