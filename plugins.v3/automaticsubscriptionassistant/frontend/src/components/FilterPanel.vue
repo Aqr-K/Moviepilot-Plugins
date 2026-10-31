@@ -19,6 +19,30 @@
         />
       </div>
 
+      <!-- 与筛选弹窗共用的单值字段：供黑名单填写名称、ID、年份与季号。 -->
+      <div v-else-if="field.type === 'text' || field.type === 'number'" class="fp-item fp-item--input">
+        <label v-if="stacked" class="fp-label" :for="fid(field.key)">{{ field.label }}</label>
+        <v-text-field
+          :id="fid(field.key)"
+          :model-value="state[field.key]"
+          :aria-label="field.label"
+          class="fp-ctl"
+          :clearable="field.clearable !== false"
+          density="compact"
+          hide-details
+          :inputmode="field.type === 'number' ? 'numeric' : undefined"
+          :type="field.type"
+          :min="field.min"
+          :max="field.max"
+          :step="field.step"
+          :placeholder="field.placeholder"
+          :prepend-inner-icon="field.icon"
+          variant="outlined"
+          @update:model-value="v => set(field.key, v ?? '', field)"
+        />
+        <p v-if="field.hint" class="fp-hint">{{ field.hint }}</p>
+      </div>
+
       <!-- 发行年份范围 -->
       <div v-else-if="field.type === 'year-range'" class="fp-item fp-item--year">
         <label v-if="stacked" class="fp-label" :for="fid(field.keyMin)">{{ field.label }}</label>
@@ -64,7 +88,7 @@
           :aria-label="field.label"
           class="fp-ctl"
           :chips="!!field.multi"
-          clearable
+          :clearable="field.clearable !== false"
           :closable-chips="!!field.multi"
           density="compact"
           hide-details
@@ -98,6 +122,7 @@ const props = defineProps({
   state: { type: Object, required: true },
   // 字段配置：
   //  { type:'search',     key, label, placeholder }
+  //  { type:'text'|'number', key, label, placeholder, hint, icon, min, max, step, clearable }
   //  { type:'year-range', keyMin, keyMax, label, minText, maxText }
   //  { type:'select',     key, label, items:[{title,value}], multi, icon, allText }
   fields: { type: Array, default: () => [] },
@@ -146,6 +171,11 @@ function normalize(v, field) {
   margin-block-end: 6px; font-size: 0.78rem; font-weight: 600;
   color: rgba(var(--v-theme-on-surface), 0.72);
 }
+
+.fp-hint { margin: 6px 0 0; font-size: 0.72rem; line-height: 1.5; color: rgba(var(--v-theme-on-surface), 0.55); }
+.fp-item--input :deep(input[type='number']) { -moz-appearance: textfield; }
+.fp-item--input :deep(input[type='number']::-webkit-outer-spin-button),
+.fp-item--input :deep(input[type='number']::-webkit-inner-spin-button) { -webkit-appearance: none; margin: 0; }
 
 .fp-year { display: flex; align-items: center; gap: 8px; }
 .fp-year__in { inline-size: 108px; }

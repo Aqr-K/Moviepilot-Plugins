@@ -397,7 +397,7 @@ const MSG = {
     runNow: '立即运行一次', runTriggered: '已触发，将在 3 秒后运行', runFailed: '触发失败：', apiUnavailable: 'API 不可用',
     testConn: '连通性测试', testOk: '连通正常', testFail: '连通失败：', throttled: '操作过于频繁，请稍后再试',
     overview: '概览', ovSources: '启用来源', ovNotify: '运行通知', ovExistOk: '已存在仍订阅', on: '开', off: '关',
-    navHistory: '订阅历史', navManage: '订阅管理', navConfig: '订阅配置',
+    navHistory: '订阅历史', navBlacklist: '黑名单', navManage: '订阅管理', navConfig: '订阅配置',
     viewHistory: '查看订阅历史', unsaved: '{n} 项未保存', providersError: '获取来源列表失败，已按现有配置渲染：',
     help: '插件帮助', collapse: '收起侧栏', expand: '展开侧栏', runtimeTitle: '运行概览', back: '返回',
     processing: '处理中', procN: '已处理 {n} 条',
@@ -424,7 +424,7 @@ const MSG = {
     runNow: '立即執行一次', runTriggered: '已觸發，將在 3 秒後執行', runFailed: '觸發失敗：', apiUnavailable: 'API 不可用',
     testConn: '連通性測試', testOk: '連通正常', testFail: '連通失敗：', throttled: '操作過於頻繁，請稍後再試',
     overview: '概覽', ovSources: '啟用來源', ovNotify: '執行通知', ovExistOk: '已存在仍訂閱', on: '開', off: '關',
-    navHistory: '訂閱歷史', navManage: '訂閱管理', navConfig: '訂閱設定',
+    navHistory: '訂閱歷史', navBlacklist: '黑名單', navManage: '訂閱管理', navConfig: '訂閱設定',
     viewHistory: '檢視訂閱歷史', unsaved: '{n} 項未儲存', providersError: '取得來源列表失敗，已按現有設定渲染：',
     help: '外掛說明', collapse: '收合側欄', expand: '展開側欄', runtimeTitle: '執行概覽', back: '返回',
     processing: '處理中', procN: '已處理 {n} 筆',
@@ -451,7 +451,7 @@ const MSG = {
     runNow: 'Run once now', runTriggered: 'Triggered; will run in 3s', runFailed: 'Trigger failed: ', apiUnavailable: 'API unavailable',
     testConn: 'Test connection', testOk: 'Connected', testFail: 'Connection failed: ', throttled: 'Too frequent, please retry later',
     overview: 'Overview', ovSources: 'Enabled sources', ovNotify: 'Notifications', ovExistOk: 'Subscribe if exists', on: 'On', off: 'Off',
-    navHistory: 'History', navManage: 'Manage', navConfig: 'Settings',
+    navHistory: 'History', navBlacklist: 'Blacklist', navManage: 'Manage', navConfig: 'Settings',
     viewHistory: 'View history', unsaved: '{n} unsaved', providersError: 'Failed to load sources; rendered from current config: ',
     help: 'Plugin help', collapse: 'Collapse', expand: 'Expand', runtimeTitle: 'Run overview', back: 'Back',
     processing: 'Processing', procN: '{n} processed',
@@ -528,6 +528,7 @@ onUnmounted(() => { if (navRO) { navRO.disconnect(); navRO = null } })
 const tabDefs = computed(() => [
   { key: 'history', label: t('navHistory'), icon: 'mdi-history' },
   { key: 'manage', label: t('navManage'), icon: 'mdi-bell-cog-outline' },
+  { key: 'blacklist', label: t('navBlacklist'), icon: 'mdi-cancel' },
   { key: 'config', label: t('navConfig'), icon: 'mdi-cog-outline' },
 ])
 function onTab(key) {

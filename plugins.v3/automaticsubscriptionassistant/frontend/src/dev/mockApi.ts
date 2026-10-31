@@ -413,12 +413,23 @@ function localizeSpec(spec: ProviderSpec, lang: string): ProviderSpec {
 }
 
 export function createMockApi(): MockApi {
+  let blacklist: Record<string, any>[] = []
   return {
     get(url: string): Promise<unknown> {
       const path = url.split('?')[0]
       const lang = parseQuery(url).lang || 'zh-CN'
+      if (path.endsWith('/blacklist')) return delay({ code: 0, list: blacklist.slice(), total: blacklist.length })
       if (path.endsWith('/providers')) {
         return delay({ providers: PROVIDER_SPECS.map(s => localizeSpec(s, lang)) })
+      }
+      if (path.endsWith('/dashboard')) {
+        const stats = computeStats()
+        return delay({
+          code: 0, enabled: true, stats, running: [],
+          providers: PROVIDER_SPECS.map(s => ({ provider_id: s.provider_id, provider_name: _L(s.provider_name, lang), enabled: !!ENABLED[s.provider_id] })),
+          counts: { history: stats.total, subscriptions: SUBSCRIBES.length, paused: SUBSCRIBES.filter(row => row.state === 'S').length, blacklist: blacklist.length },
+          recent: HISTORY.filter(row => row.status === 'subscribed').slice(0, 5),
+        })
       }
       if (path.endsWith('/status')) {
         return delay({
@@ -458,6 +469,24 @@ export function createMockApi(): MockApi {
       return delay({})
     },
     post(url: string, body?: Record<string, any>): Promise<unknown> {
+      if (url.endsWith('/blacklist/add') || url.endsWith('/subscribes/block')) {
+        const blocking = url.endsWith('/subscribes/block')
+        const targets = blocking ? SUBSCRIBES.filter(row => (body?.ids || []).includes(row.id))
+          : [body?.kind === 'history' ? HISTORY.find(row => row.unique === body?.unique)
+            : body?.kind === 'subscription' ? SUBSCRIBES.find(row => row.id === body?.id) : body?.media]
+        const ok_ids: number[] = []
+        targets.filter(Boolean).forEach((media: any) => {
+          blacklist.unshift({ ...media, id: crypto.randomUUID(), title: media.title || media.name,
+            season: body?.scope === 'season' ? Number(media.season) : null, time: new Date().toLocaleString() })
+          if (blocking) ok_ids.push(media.id)
+        })
+        if (blocking) SUBSCRIBES = SUBSCRIBES.filter(row => !ok_ids.includes(row.id))
+        return delay({ code: 0, ok: ok_ids.length, failed: 0, ok_ids, failed_ids: [] })
+      }
+      if (url.endsWith('/blacklist/delete')) {
+        blacklist = blacklist.filter(row => !(body?.ids || []).includes(row.id))
+        return delay({ code: 0 })
+      }
       if (url.endsWith('/run')) {
         const spec = PROVIDER_SPECS.find(s => s.provider_id === body?.provider_id)
         return delay({ code: 0, message: `${spec?.provider_name || body?.provider_id} 已触发，将在 3 秒后运行` }, 500)

@@ -1,5 +1,5 @@
 <template>
-  <!-- 三标签导航（订阅历史 / 订阅管理 / 订阅配置），Page 与 Config 共用以保证风格一致 -->
+  <!-- 标签导航（订阅历史 / 订阅管理 / 黑名单 / 订阅配置），Page 与 Config 共用以保证风格一致 -->
   <nav class="asa-tabs" role="tablist">
     <button
       v-for="tab in tabs"

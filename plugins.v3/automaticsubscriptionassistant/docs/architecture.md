@@ -1,302 +1,144 @@
-# 自动订阅助手 架构文档（Architecture）
+# 自动订阅助手 v3 架构
 
-> 插件：`AutomaticSubscriptionAssistant`
-> 目录：`app/plugins/automaticsubscriptionassistant/`
-> 事实源：本目录 `BUILD_SPEC.md` 与 `docs/superpowers/specs/2026-07-12-automaticsubscriptionassistant-design.md`
+本插件后续仅维护、测试和发布 MoviePilot v3 版本。源码位于 `plugins.v3/automaticsubscriptionassistant/`，安装后由宿主加载到 `app/plugins/automaticsubscriptionassistant/`。本文以该目录下 3.2.0 的实现为依据；具体发布版本以 Release 为准。
 
-本插件统一聚合**豆瓣榜单 / 猫眼榜单 / 热门媒体 / Mikan 季度新番 / 奈飞榜单**五类来源，通过一条共享的落地管线完成「识别 → 查重 → 订阅 → 记历史」，并以可组合的两阶段过滤器链筛选条目。新增订阅源只需新增一个 `RankProvider` 子类，落地、过滤、历史与前端配置块全部复用。
+## 模块职责
 
----
+| 模块 | 职责 |
+| --- | --- |
+| `__init__.py` | 装载配置，注册来源定时任务、插件 API、数据库模型、侧栏与仪表盘入口 |
+| `core/provider.py`、`core/registry.py` | 定义 `RankProvider`、运行上下文 `ProviderContext`，注册并创建来源 |
+| `providers/*.py` | 抓取并解析五类来源，产出 `RankMediaItem`，声明配置与过滤字段 |
+| `core/config.py` | 类型转换、全局与来源配置访问、按 `ProviderSpec` 生成默认值 |
+| `core/filters.py` | 组合 pre/post 过滤链，返回接受或拒绝的原因 |
+| `core/dedup.py` | 从宿主活动订阅建立 `SubscribedIndex`，按身份、类型、季号和剧集组快速去重 |
+| `core/executor.py` | 单条候选的黑名单检查、识别、去重、订阅与历史记录 |
+| `core/runner.py` | 单来源抓取与逐条执行、退出信号、统计、异常兜底和历史修剪 |
+| `core/history.py`、`core/tables.py` | 展示历史、独立成功账本、SQL 查询与写入 |
+| `core/migration.py` | 归档并迁移旧 KV 历史，保留失败源以便重试 |
+| `core/blacklist.py` | 独立黑名单 KV 存储、匹配、管理 API、先保存规则再退订 |
+| `core/subscribes.py` | 管理本插件用户名对应的订阅，复核归属后退订或暂停/恢复 |
+| `core/models.py`、`core/i18n.py` | 候选、结果、配置描述与历史模型，来源名称和字段文本本地化 |
 
-## 1. 分层原则
+来源只负责抓取与解析；识别、订阅和历史统一由 executor 处理。provider 可通过上下文中的 `get_data/save_data` 保存缓存，黑名单也使用这组宿主 KV 端口。
 
-插件采用**多文件抽象分层**，每一层职责单一、边界清晰，禁止跨层耦合：
+## 执行流程
 
-| 层 | 文件 | 职责 | 明确不做 |
-|----|------|------|----------|
-| **入口层** | `__init__.py` | 解析配置、注册定时调度（`get_service`）、暴露 HTTP API（`get_api`）、编排 `run_provider` | 不含抓取细节、不含落地细节 |
-| **provider 层** | `providers/*.py` | 只负责「抓取 + 解析成标准中间条目 `RankMediaItem`」，可携带宿主通用 `media_source/media_id` | 不碰识别、不碰订阅落地、不写历史 |
-| **filter 层** | `core/filters.py` | 只返回判定结果 `FilterVerdict`（accept / reject + 原因） | 不写状态、不加订阅、不改条目 |
-| **executor 层** | `core/executor.py` | 唯一落地管线：去重键 → pre 过滤 → 识别 → post 过滤 → 媒体库查重 → 订阅查重 → 加订阅 → 记历史 | 不抓取、不解析源数据 |
-| **runner 层** | `core/runner.py` | 编排单源：`fetch` → 逐条 `executor.process`，累加状态计数，尊重退出信号，兜底整源抓取失败 | 不实现落地/过滤具体逻辑 |
-| **history 层** | `core/history.py` | 读写插件自有表 `subscribe_history`，按行读写、写入即提交，查询/分页/统计下推 SQL | 不参与落地判定 |
-| **迁移层** | `core/migration.py` | 首次启动把存量 KV 历史搬进自有表，原值留档备份并写迁移标记 | 一次性，幂等 |
-
-支撑模块：
-
-- `core/models.py`：全部数据模型（`RankMediaItem`、`ProviderSpec`、`FieldSpec`、`FilterVerdict`、`SubscribeOutcome`、`HistoryRecord`、`SubscribeStatus`）。
-- `core/config.py`：类型安全配置访问器（`TypedConfigAccess`）+ `GlobalConfig` / `ProviderConfig` / `PluginSettings` + 反射生成默认值 `build_defaults`。
-- `core/provider.py`：`RankProvider` 抽象基类 + `ProviderContext`（运行期依赖注入）。
-- `core/registry.py`：`ProviderRegistry` 注册与发现（模块级单例 + `@register` 装饰器）。
-
-分层的核心收益：**五源共享同一条尾部管线**（原 `popularsubscribe` / `doubanrankplus` / `maoyanrank` 等插件各自重复的「识别 → 查重 → 订阅 → 记历史」被收敛为唯一实现），新增源的边际成本降到最低。
-
----
-
-## 2. 数据流（flowchart）
-
-一次运行由「每 provider 独立 cron 定时任务」或「手动 `POST /run`」触发，进入 `ProviderRunner`，拉取条目后逐条走 `SubscribeExecutor.process` 的严格顺序管线：
+每个启用且 cron 有效的来源注册独立任务。`POST /run` 则安排指定来源在约 3 秒后执行。
 
 ```mermaid
 flowchart TD
-    Trigger["Cron 定时任务 / 手动 POST /run<br/>每 provider 独立 cron"] --> Runner["ProviderRunner.run(provider, provider_config)"]
-    Runner --> Fetch["provider.fetch(options, context)<br/>抓取 + 解析 -> Iterator[RankMediaItem]"]
-    Fetch --> Loop{"逐条 item<br/>(检查退出信号 event)"}
-    Loop -->|下一条| Process["SubscribeExecutor.process(item, ...)"]
-
-    Process --> Dedup{"1. 去重键<br/>history.is_handled(key)?"}
-    Dedup -->|命中| SAH["ALREADY_HANDLED<br/>(不记新历史)"]
-    Dedup -->|未命中| Pre{"2. pre 过滤<br/>vote 前/year/popularity"}
-
-    Pre -->|reject| FPre["FILTERED (pre)<br/>记历史，不标记 handled"]
-    Pre -->|accept| Reco{"3. 识别<br/>recognize_media(meta, media_source, media_id)"}
-
-    Reco -->|None| UR["UNRECOGNIZED<br/>记历史，不标记 handled"]
-    Reco -->|MediaInfo| Post{"4. post 过滤<br/>vote/media_type"}
-
-    Post -->|reject| FPost["FILTERED (post)<br/>记历史，不标记 handled"]
-    Post -->|accept| Lib{"5. 媒体库查重<br/>get_no_exists_info -> exist_flag?"}
-
-    Lib -->|True 已完整存在| ME["MEDIA_EXISTS<br/>记历史；仅正向终态标记 handled"]
-    Lib -->|False 有缺失| Sub{"6. 订阅查重<br/>subscribechain.exists?"}
-
-    Sub -->|True| SE["SUBSCRIPTION_EXISTS<br/>记历史；仅正向终态标记 handled"]
-    Sub -->|False| Add["7. 加订阅<br/>subscribechain.add(media_source, media_id, ...) -> (sid, err)"]
-
-    Add -->|sid 有值| OK["SUBSCRIBED<br/>记历史(subscribe_id) + 标记 handled"]
-    Add -->|sid 为空| ERR["ERROR<br/>记历史(reason=err)，允许重试"]
-
-    SAH --> Stats["8. 累加 stats[status]"]
-    FPre --> Stats
-    UR --> Stats
-    FPost --> Stats
-    ME --> Stats
-    SE --> Stats
-    OK --> Stats
-    ERR --> Stats
-
-    Stats --> Loop
-    Loop -->|无更多条目| Flush["返回各状态计数<br/>（记录已在写入时提交）"]
+    Fetch[来源抓取 RankMediaItem] --> Target[解析标题中的明确季号]
+    Target --> BlockPre{来源身份命中黑名单?}
+    BlockPre -->|是| Ignored[blacklisted]
+    BlockPre -->|否| Index{命中活动订阅索引?}
+    Index -->|是| Exists[subscription_exists]
+    Index -->|否| Handled{精确候选已成功处理?}
+    Handled -->|是| Done[already_handled]
+    Handled -->|否| Pre{pre 过滤通过?}
+    Pre -->|否| Filtered[filtered]
+    Pre -->|是| Recognize[宿主识别并复制 MediaInfo]
+    Recognize --> Resolve[检查整剧黑名单并确定目标季]
+    Resolve -->|命中规则| Ignored
+    Resolve -->|识别失败或季号不明确| Unknown[unrecognized]
+    Resolve -->|目标明确| Canonical{规范身份命中黑名单或成功账本?}
+    Canonical -->|黑名单| Ignored
+    Canonical -->|已处理| Done
+    Canonical -->|否| Post{post 过滤通过?}
+    Post -->|否| Filtered
+    Post -->|是| Library{媒体库完整存在且未允许已有媒体?}
+    Library -->|是| InLibrary[media_exists]
+    Library -->|否| Subscription{宿主确认订阅已存在?}
+    Subscription -->|是| Exists
+    Subscription -->|否| Final[在共享锁内复查最新黑名单]
+    Final -->|命中规则| Ignored
+    Final -->|未命中| Add[SubscribeChain.add]
+    Add -->|成功| Subscribed[subscribed]
+    Add -->|失败或异常| Error[error]
 ```
 
-要点：
+所有结果参与本轮统计。普通处理分支会写入或合并历史；`already_handled` 不写新历史，活动索引短路也会避免重复写已处理记录。单条异常不会中断整个来源。
 
-- **步骤严格按序**，任一步命中即短路返回对应状态，不再执行后续步骤。
-- **`get_no_exists_info` 语义反直觉**：返回 `True` 表示媒体库已「完整存在」（未允许已有媒体时跳过），`False` 表示有缺失（可订阅）。
-- 每条 item 都包在 `try/except` 内，单条异常 → `ERROR` 状态并 `continue`，不影响整源。
-- `ALREADY_HANDLED` 是唯一「不写新历史」的分支（该身份键已有正向终态记录）。
-- 历史按行写入并即时提交：两个来源同时运行、或用户在运行期间删记录，都不会互相覆盖。
+`get_no_exists_info()` 返回 `True` 表示媒体库完整存在，只有 `exist_ok=False` 时才因此跳过订阅。完整存在的判定仍由宿主负责。
 
-### v3 媒体身份边界
+## 媒体身份与季号
 
-`RankMediaItem` 以宿主 v3 的 `media_source + media_id` 为主身份，旧版
-`tmdb_id/douban_id/bangumi_id` 等字段只作为缓存和兼容入口。executor 将该身份原样
-传给宿主 `chain.recognize_media`，识别成功后再从 `MediaInfo` 取最终主身份，交给宿主
-`SubscribeChain.exists` 和 `SubscribeChain.add`；插件不再自行把来源 ID 映射成 TMDB。
+候选优先携带宿主通用身份 `media_source + media_id`。旧 `tmdb_id/douban_id/bangumi_id` 字段作为兼容入口保留；新增来源通过通用身份接入。识别后从 `MediaInfo` 解析最终主身份，再交给 `SubscribeChain`，不会直接用原始豆瓣 ID 创建另一个来源的订阅。
 
-插件媒体身份使用通用的 `media_source/media_id` 与剧集组；历史另存原始候选与精确候选键。
-旧的三类 ID 列仅作存量兼容。AniList、IMDb、TVDB 或未来扩展来源不会再触发新的单源列/模型字段，
-旧版单源列只在迁移时读取并回填到通用身份。
+明确季号在预去重之前从标题或候选字段解析，特别篇 `0` 不被当作空值。未知季不会通过“任意已订阅季”匹配；识别后仍无法确定目标季且存在多个可能季时，保留为 `unrecognized`。只有一个正季可用时才允许推导该季。
 
-`SubscribedIndex` 仅按宿主订阅行建立识别前的快速索引，支持内置及合法扩展来源，并
-按季号/剧集组生成键。索引未命中、身份不完整或来源无法规范化时，仍由宿主识别与
-`exists` 完成最终判断。
+规范键区分电影与剧集，并在适用时包含季号与剧集组。识别返回的媒体对象可能来自宿主共享缓存，executor 深拷贝后再设置目标季与剧集组。未知季候选不永久绑定到第一次识别出的季。
 
----
+## 状态与存储
 
-## 3. 组件关系（classDiagram）
+`SubscribeStatus` 当前有八种结果：
 
-核心抽象与其协作关系如下（省略字段细节，突出结构）：
+| 值 | 含义 | 写入成功账本 |
+| --- | --- | --- |
+| `subscribed` | 创建订阅成功 | 是 |
+| `media_exists` | 媒体库完整存在且未允许已有媒体 | 是 |
+| `subscription_exists` | 活动索引或宿主确认订阅已存在 | 是 |
+| `already_handled` | 精确候选或规范身份已成功处理 | 沿用已有状态 |
+| `blacklisted` | 用户主动忽略 | 否 |
+| `filtered` | 来源规则过滤 | 否 |
+| `unrecognized` | 未识别到媒体或未确定目标季 | 否 |
+| `error` | 处理或订阅失败 | 否 |
 
-```mermaid
-classDiagram
-    class RankProvider {
-        <<abstract>>
-        +str provider_id
-        +str provider_name
-        +get_spec() ProviderSpec
-        +fetch(options, context) Iterator~RankMediaItem~
-        +has_listening(options) bool
-    }
-    class DoubanRankProvider
-    class MaoyanRankProvider
-    class PopularRankProvider
-    class MikanRankProvider
-    class NetflixRankProvider
-    RankProvider <|-- DoubanRankProvider
-    RankProvider <|-- MaoyanRankProvider
-    RankProvider <|-- PopularRankProvider
-    RankProvider <|-- MikanRankProvider
-    RankProvider <|-- NetflixRankProvider
+`subscribe_history` 保存按身份合并的展示记录，包括来源候选快照 `source_item` 和精确候选键 `candidate_key`。`subscribe_handled` 独立保存规范身份及精确候选别名。成功记录不被后续过滤、错误或忽略结果降级。
 
-    class ProviderRegistry {
-        -Dict~str,Type~ _providers
-        +register(cls)
-        +create_all() List~RankProvider~
-        +get(provider_id) RankProvider
-        +ids() List~str~
-    }
-    ProviderRegistry o-- RankProvider : 注册/创建
+历史写入即时提交，查询、筛选和分页由 SQL 完成。`history_keep` 只修剪展示历史，成功账本保留；显式删除历史或清空历史才解除对应成功状态与别名。重新识别优先恢复来源快照，先保存新结果，再在适用时移除旧身份记录。
 
-    class ProviderSpec {
-        +str provider_id
-        +str provider_name
-        +str default_cron
-        +List~FieldSpec~ options_schema
-        +List~FieldSpec~ filters_schema
-        +to_dict()
-    }
-    RankProvider ..> ProviderSpec : get_spec()
+表结构初始化使用 engine 弱引用集合与共享锁，兼容旧表候选列补齐。KV 历史迁移先归档再写库；备份失败保留源，部分失败留待重试，重复迁移不覆盖较新的数据库记录。
 
-    class ProviderConfig {
-        +bool enabled
-        +str cron
-        +dict options
-        +dict filters
-        +option(key)
-        +filter(key)
-    }
-    ProviderConfig ..> ProviderSpec : 默认值回退
+## 黑名单
 
-    class MediaFilter {
-        <<abstract>>
-        +str filter_id
-        +str stage
-        +accept(item, mediainfo, config) FilterVerdict
-    }
-    class FilterChain {
-        -List~MediaFilter~ _filters
-        +run(stage, item, mediainfo, config) FilterVerdict
-    }
-    FilterChain o-- MediaFilter : 按 stage 顺序执行
+规则单独保存在宿主插件 KV 的 `subscription_blacklist`，与历史表和成功账本分开。清空历史、修剪展示记录、删除订阅或重启插件不会移除规则。
 
-    class SubscribeExecutor {
-        +process(item, provider, filter_chain, history, filters_config) SubscribeOutcome
-    }
-    SubscribeExecutor ..> FilterChain : pre/post 判定
-    SubscribeExecutor ..> HistoryStore : 去重 + 记历史
-    SubscribeExecutor ..> ProviderContext : 注入链依赖
+- 电影按身份忽略；剧集可指定季或全部季。类型未知且只有 TMDB ID 时不在识别前直接拦截，避免电影与剧集 ID 空间重叠。
+- 从历史添加时保留原始来源与规范身份别名。整剧 TMDB 身份可覆盖不同季的豆瓣 subject ID。
+- 豆瓣/Bangumi 的全部季规则若缺少整剧身份，会调用宿主识别补充；无法确认时返回失败，提示改用 TMDB ID、名称规则或指定季。
+- 无 ID 规则按完整名称、类型与可选年份匹配；名称忽略大小写和连续空白。ID 规则不会单凭同名回退匹配。
+- 识别前、识别后与创建订阅前检查规则。规则写入和最终“检查并添加订阅”共用进程内 `RLock`，防止同一进程中的在途候选绕过新规则。
+- `POST /subscribes/block` 先保存规则再退订。保存失败不退订；退订失败保留规则，并返回失败 ID 和原因。
 
-    class HistoryStore {
-        -session_factory
-        +is_handled(key)
-        +mark_handled(key)
-        +record(HistoryRecord)
-        +query(...)
-        +uniques(...)
-        +delete(unique)
-        +prune(keep)
-        +stats()
-    }
+移除规则后，下次运行恢复正常评估；成功历史仍参与去重，不会因移除黑名单立即创建订阅。详细用户操作见[黑名单说明](../../../docs/automatic-subscription-assistant-blacklist.md)。
 
-    class ProviderRunner {
-        +run(provider, provider_config) Dict~str,int~
-    }
-    ProviderRunner *-- SubscribeExecutor
-    ProviderRunner ..> RankProvider : fetch
-    ProviderRunner ..> HistoryStore : 记历史
+## 来源差异
 
-    class ProviderContext {
-        +chain
-        +downloadchain
-        +subscribechain
-        +logger
-        +event
-        +proxy
-        +get_data
-        +save_data
-    }
-    RankProvider ..> ProviderContext : fetch 依赖
-```
+| 来源 | 默认 cron | 当前行为 |
+| --- | --- | --- |
+| `douban` | `0 8 * * *` | RSSHub 内置榜单或自定义 RSS，提取豆瓣身份，标题中的明确季号交给 executor |
+| `maoyan` | `0 9 * * *` | 电影票房与平台×类型网播热度；网络电影已移除；日期解析区分过去/未来，未知格式不猜年份 |
+| `popular` | `5 1 * * *` | 读取宿主热门订阅统计，依赖订阅数据共享；电影/剧集配置独立，评分与人次在来源内过滤，去重保留季号 |
+| `mikan` | `0 10 * * 1` | 季度新番，可补充 Bangumi ID；无 ID 时交给宿主按名称与年份识别 |
+| `netflix` | `0 11 * * 3` | 全球榜与国家榜，TSV 或富元数据；去重保留季号，史上最热使用对应数据集 |
 
-协作叙述：
+Netflix TSV 按 UTF-8 解码，以换行符分行，避免特殊字符误断行。缓存分模块内存与插件 KV 两层，仅缓存完整成功结果；抓取失败、空结果或富页缺项不作为长期成功缓存。连通性测试强制禁用缓存，只验证抓取，不进入订阅/历史管线。
 
-- `ProviderRegistry` 持有各 `RankProvider` 子类，`create_all()` 实例化全部源；`providers/__init__.py` 的 `import` 触发 `@register` 注册。
-- `ProviderRunner` 组合一个 `SubscribeExecutor`，先调 `provider.fetch`，再对每条 item 调 `executor.process`。
-- `SubscribeExecutor` 依赖 `FilterChain`（pre/post 两阶段判定）、`HistoryStore`（去重与记录）、`ProviderContext`（注入 `chain` / `downloadchain` / `subscribechain`；并注入插件 KV 读写 `get_data` / `save_data`，供 provider 持久化缓存，如奈飞两级缓存的 L2）。`get_data` / `save_data` 由 `__init__.run_provider` 构造 `ProviderContext` 时从插件基类传入，可能为 None（测试 / 无 KV 时禁用持久化，现有位置参数构造不受影响）。
-- `ProviderConfig` 依据 `ProviderSpec` 的 `options_schema` / `filters_schema` 做默认值回退，杜绝「表单字段」与「配置读取」漂移。
+缺少 cron 配置时使用来源默认值；后端显式空字符串不会注册任务。前端装载配置时会把空 cron 回填为来源默认值。保存配置会校验持久化结果，重新初始化插件并刷新宿主任务；空监听来源会被关闭。
 
----
+## 前端、侧栏与 API
 
-## 4. 五个 Provider
+详情/配置界面提供历史、管理、黑名单、配置四个标签。侧栏项以 `self.plugin_name` 显示“自动订阅助手”，使用 `mdi-rss`，归入 `subscribe` 分组、要求 `subscribe` 权限，保留 `nav_key=blacklist`。宿主聚合已启用插件的侧栏项；插件总开关和至少一个来源需启用。
 
-五源共用统一的 `RankProvider.fetch` 契约，产出标准化的 `RankMediaItem`（可能没有媒体身份，识别交由 executor 完成），差异只在数据源与解析：
+`AppPageBlacklist` 是独立联邦入口，透传属性到 `AppPage`；`AppPage` 复用 `Page` 并以黑名单为初始视图。`Page` 管理三类列表的共享分页和移动端行数。黑名单与历史复用 `MediaCard`、`FilterPanel`、`styles/mediaViews.css`，筛选草稿只有在应用后才生效。
 
-### 4.1 `douban` — DoubanRankProvider（豆瓣榜单）
+所有插件路由声明见 `get_api()`；完整接口清单见[使用文档](../README.md#后端-api)。除 `DELETE /history` 为 `apikey` 外，其余均为 `bear`。批量管理须按 `ok_ids/failed_ids` 展示结果，不能只依据 `code=0` 清空全部选择。
 
-- **数据源**：RSSHub 豆瓣榜单 RSS（如 `movie-hot-gaia` 热门电影、`tv-hot` 热门电视剧、`movie-top250` 等，共 7 个内置榜单 + 用户自定义 `rss_addrs` 每行一个）。
-- **默认 cron**：`0 8 * * *`。
-- **要点**：用 `RequestUtils(timeout=240, proxies=...)` 拉取，`xml.dom.minidom` 解析 `<item>`；从 `<link>` 用正则 `/(\d+)/` 提取 `douban_id`，`year` 缺失时从 `description` 兜底正则；`type` 字段映射 `MediaType`。`unique_seed = f"{title}_{year}_(DB:{douban_id})"`。评分/季号在 executor 用 `recognize_media(media_source=MediaSource.Douban, media_id=...)` 识别后由 `MediaInfo` 提供，故 `VoteFilter` 归 post 阶段。
+## 仪表盘
 
-### 4.2 `maoyan` — MaoyanRankProvider（猫眼榜单）
+`get_dashboard_meta()` 沿用 `overview` 键和“自动订阅助手 · 订阅概览”名称；`get_dashboard()` 返回 `cols=12/md=6`、默认 300 秒刷新和 Vue 模式空元素。空键兼容旧调用，未知组件键返回空。宿主的仪表盘设置负责组件启用与布局。
 
-- **数据源**：猫眼票房/热度 API（`piaofang.maoyan.com`）——电影票房 `/dashboard-ajax/movie`、网络电影 `/dashboard/webMaoYanHotData`、网播热度 `/dashboard/webHeatData`（电视剧/网剧/综艺），支持平台细分（全网/腾讯/爱奇艺/芒果/优酷/搜狐/乐视/PPTV，笛卡尔积）。
-- **默认 cron**：`0 9 * * *`。
-- **要点**：先用 `PlaywrightHelper().action(...)` 取 Cookie（失败降级空 dict），再带 Cookie + UA 请求 JSON。电影票房 / 网络电影归 `MOVIE`，网播热度归 `TV`；`year` 由 `releaseInfo` 天数反推（`date.today() - timedelta(days=n)`）。TV 结果按 title 内存去重。`unique_seed = f"{mtype_value}_{title}_{year}"`。
+组件使用只读 `GET /dashboard` 汇总读取：复用 `/status` 的来源/运行状态和保留历史统计，再读取本插件用户名对应的当前订阅、暂停数量、独立黑名单规则数量，以及最多五条 `subscribed` 历史。存储读取失败返回业务错误，不用零值掩盖失败。
 
-### 4.3 `popular` — PopularRankProvider（热门媒体）
+前端在零历史时仍显示指标和来源。图表使用当前保留历史，兼容旧状态及未知状态；不能把这些数量解释为终生执行次数。最近订阅标题保留季号、特别篇和剧集组。
 
-- **数据源**：MoviePilot 官方服务器订阅统计 `MoviePilotServerHelper.get_subscribe_statistic(stype, page, count, genre_id, min_rating)`（classmethod，受主程序全局 `settings.SUBSCRIBE_STATISTIC_SHARE`「订阅数据共享」门控，关闭时服务端直接返回 `[]`）。
-- **默认 cron**：`5 1 * * *`。
-- **要点**：
-  - **`stype` 必须传中文**（`电影` / `电视剧`）——服务端只接受中文枚举，传英文 `movie`/`tv` 会返回空列表；provider 内用 `_STYPE_CN` 映射 `movie→电影`、`tv→电视剧`。返回项 `type` 亦为中文，`_map_media_type` 经 `MediaType.MOVIE.value == "电影"` 天然兼容。服务端统计仅电影 / 电视剧两类（动漫混在电视剧中、官方不单列，`MediaType` 枚举亦无「动漫」）。
-  - 统计项直接携带宿主的 `media_source/media_id`，不再投影到固定的单源 ID 槽位。
-  - **配置按电影 / 剧集两大组独立**，字段 key 统一 `{category}_{enabled|genres|page_cnt|min_rating|popularity}`：`{category}_enabled` 开关独立控制订阅（缺省两类都开）；**风格标签** `movie_genres` / `tv_genres`（各自一套 TMDB genre，电影 19 / 剧集 16 项）下推 `genre_id`——空=全部，多选则逐 genre 分别请求、按 `unique_seed` 去重合并（`动画=16`）；`{category}_page_cnt` 独立获取条数；`{category}_min_rating`（按统计项 `vote`）、`{category}_popularity`（按 `source_meta["count"]` 订阅人次）**均在 provider 内本地过滤**。
-  - **命中主程序『热门订阅』的同一份共享缓存**：请求走「无过滤基线」（`min_rating=None`、`genre` 为空时不带 `genre_id`），与主程序 `/subscribe/popular` 端点（同样调 `async_get_subscribe_statistic`）参数一致——二者共享同一进程内缓存（cache 装饰器规范化 `async_` 前缀、cache key 相同）。故评分下限改本地过滤而非下推服务端，既避免过滤 cache key 各自打空，也能直接命中前端已填充的缓存。
-  - **空结果诊断**：门控关闭时提前告警并返回；已开启却为空时用原始请求读 `status_code`，日志区分「200 但无数据 / 连不上·超时 / HTTP 异常」，不再笼统。
+数据请求完成后才安排下一次自动刷新，在途请求去重；宿主停用刷新、变更周期或组件卸载时清理计时器。卸载后的迟到响应不写入状态，手动刷新失败保留最近成功数据。组件只做读取与页面跳转，不提供运行来源或订阅写操作。
 
-### 4.4 `mikan` — MikanRankProvider（Mikan 季度新番）
+## 开发与验证
 
-- **数据源**：蜜柑计划（`mikanani.me`，备用 `mikanime.tv`）季度番剧页 `/Home/BangumiCoverFlowByDayOfWeek?year={year}&seasonStr={季}`（`seasonStr` 实测为中文季名 `春`/`夏`/`秋`/`冬`）+ 番剧详情页 `/Home/Bangumi/{mikan_id}`。API 移植自 `mikan_flutter` 的 `mikan.ts`，请求需带 Mikan 专用 UA（`... MikanProject/1.0.0`）。
-- **默认 cron**：`0 10 * * 1`（季番每周更新，每周一抓一次）。
-- **要点**：轻客户端 `MikanApi` 用 `RequestUtils(ua=MIKAN_UA)` 抓 HTML，`BeautifulSoup(html, "lxml")` 解析 `div.sk-bangumi li`：`span[data-bangumiid]`(Mikan id)、`a.an-text[title]`(中文标题)、`span[data-src]`(封面)、按星期分组的 `div.row` 文本(week)。`year=0` 取当前年，`season="当前"` 按当前月推导季度（1-3→冬 / 4-6→春 / 7-9→夏 / 10-12→秋）。`resolve_bangumi_id` 开启时逐条抓详情页、正则 `b(?:gm|angumi)\.tv/subject/(\d+)` 提取 bgm.tv subject id 填入 `bangumi_id`，每条间隔约 0.6s 并响应 `context.event` 退出信号；抓不到则 `None`，executor 退化为标题+年份识别。番剧统一 `MediaType.TV`，`unique_seed = mikan_id`。识别由 executor 走宿主通用身份 `media_source=MediaSource.Bangumi, media_id=...`，最终主身份与订阅持久化由宿主决定。
+新增来源实现 `RankProvider.get_spec()/fetch()`，在 `providers/__init__.py` 注册；新增过滤器在 `core/filters.py` 声明并加入对应来源 schema。
 
-### 4.5 `netflix` — NetflixRankProvider（奈飞榜单）
+v3 后端回归位于 `tests/plugins.v3/automaticsubscriptionassistant/tests/`，在插件仓根目录使用可导入 MoviePilot v3 宿主的环境执行 `python -m pytest tests/plugins.v3/automaticsubscriptionassistant/tests -q`。测试引导使用临时配置与数据库。
 
-- **数据源**：Netflix 官方 Tudum Top10 公开 TSV（GET，无鉴权，制表符分隔、首行表头）：`most-popular.tsv`（全球·史上最热·不分周，列 `category rank show_title season_title ...`）、`all-weeks-global.tsv`（全球·每周·近 5 年，列 `week category weekly_rank show_title season_title ...`）、`all-weeks-countries.tsv`（94 国·每周·近 5 年，列 `country_name country_iso2 week category weekly_rank show_title season_title ...`，**约 30MB**）。全球 category 有 4 种（`Films (English)` / `Films (Non-English)` / `TV (English)` / `TV (Non-English)`），国家 category 有 2 种（`Films` / `TV`）。
-- **默认 cron**：`0 11 * * 3`（Top10 每周更新，每周三抓一次）。
-- **要点**：`_load_tsv` 用 `RequestUtils(proxies=settings.PROXY if proxy else None, timeout=120)` 抓取，并**强制按 UTF-8 从 `ret.content` 解码**（Netflix TSV 响应头不带 charset，直接取 `.text` 会被 requests 兜底成 ISO-8859-1 而误解码 UTF-8，导致含特殊字符的剧名如『The Åre Murders』拆出 U+0085 等控制符）；`_parse_tsv` 用 **`split("\n")`**（而非 `splitlines()`——后者会在 U+0085/U+2028 等 Unicode 行边界额外断行、撕裂数据行并污染 `week` 列）+ `dict(zip(header, line.split("\t")))` 解析。**全球榜与国家榜相互独立、可同时启用**：全球按 `global_dataset` 取 most-popular 或 all-weeks-global（周榜 `_latest_week_rows` 只取 `max(week)`），按所选 category 各按 rank 升序取前 `limit`；国家榜取 all-weeks-countries 最新周，对每个所选 iso2 × category 各取前 `limit`。产出后按 `unique_seed = f"{type_value}_{show_title}"`（`movie`/`tv`）在单次 fetch 内 `seen` 去重。category 以 `Films` 开头映射 `MediaType.MOVIE` 否则 `MediaType.TV`；剧集从 `season_title` 正则 `Season\s*(\d+)` 抽季号。**Netflix 无外部 id、无年份**：`year=None`、无 tmdb/douban/bangumi id，executor 只能退化为标题+类型名称识别。逐条 try/except continue，响应 `context.event`；整表抓取失败向上抛出（runner 捕获）。`filters_schema` 为空（类型已由 category 区分、无年份数据）。
-
-- **按周（week）两级缓存（`use_cache` 开，默认开）**：Netflix Top10 固定 7 天周期，数据带 `week`/`weekEndDate`（周日结束日，如 `2025-11-16`），每周数据在**次周周二**发布——同一刷新周内重复抓取只会拿到相同内容、无谓请求可能触发风控。`fetch` 外层包一层缓存：`_cache_key(options)` 以「与结果相关的选项」（`rich_metadata`/`global`/`global_dataset`/多选类去重排序/`limit`/`proxy`；`max_workers`、`use_cache` 不入键）`json.dumps(sort_keys=True)` 生成稳定键。缓存分两级：**L1** `_NETFLIX_CACHE`（`threading.Lock` 保护的**模块级** dict，进程内快、跨 run 存活——`run_provider` 每次 new 一个实例，实例级缓存无效）；**L2** 持久化插件 KV（经 `ProviderContext.get_data`/`save_data` 落 DB，键 `netflix_cache`，值 `{cache_key: {items:[RankMediaItem.to_dict()...], week, valid_until, fetched_ts}}`，**抗进程重启**）。查缓存先 L1（命中未过期直接 `yield from` 旧条目、跳过全部网络），L1 未命中查 L2（`_load_persistent` 反序列化 `RankMediaItem.from_dict`，命中则**回填 L1** 后产出）；都未命中才走原抓取逻辑（抽成 `_collect`），产出完整列表后连同 `_latest_week(items)`（取条目 `source_meta['week']` 的 `max`）与 `_valid_until` 的失效时间戳**同时写 L1 + L2**（`_save_persistent` 序列化并剔除 store 内已过期条目防无限增长）。`_valid_until`：`week + 9 天` 的 UTC epoch ≈ 次周二下次发布，取 `max(base, now + 12h)`（发布边界拿到旧 week 时短重查）；无法解析 week（`most-popular` 不分周）→ `now + 6 天` 兜底 TTL。`_now_ts()` 抽成方法供测试 monkeypatch 控制“现在”。**中途 `context.event` 被 set（结果不完整）→ 不写缓存**；`use_cache=False` → 不读不写；**L2 KV 读写失败仅告警、降级为仅 L1（内存），不影响抓取**（防污染）；`context` 无 `get_data`/`save_data`（如测试手动构造）或为 None 时仅走 L1、进程重启后首跑必重抓。TSV 周榜 / 国家榜（`week` 列）与富模式（`weekEndDate`）产出条目均带 `week` 供缓存定位（`most-popular` 无周概念，走兜底 TTL）。
-- **富元数据模式（`rich_metadata` 开）**：数据源改为 Netflix **Tudum Top10 榜单页**（HTML，需浏览器 UA），页面 SSR 内嵌 `netflix.reactContext.models.graphql = JSON.parse('<单引号 JS 串>')`。`_load_rich_page` 用 `RequestUtils(ua=..., proxies=..., timeout=30)` 取 HTML → `_extract_graphql_literal`（从标记逐字符扫描到首个**未转义**单引号）→ `_decode_js_string`（正则单次左→右解码 `\\`/`\'`/`\"`/`\n`/`\uXXXX`/`\xXX` 等，正确还原 CJK/重音：`\\uXXXX` 先降为 `\uXXXX` 再交 `json.loads`）→ `json.loads` → `_parse_rich_store` 遍历归一化 store 取所有含 `top10Video` 的 `PulseTop10ItemEntity`，按 `videoId` 去重，产出 `{rank(weeklyRank), title, clean_title(parentShow.title), year(releaseYear), video_id, category, week(weekEndDate)}`。榜单页 URL：全球英语 `/tudum/top10/films`（`ENGLISH_MOVIES`）、`/tudum/top10/tv`（`ENGLISH_SERIES`）；国家 `/tudum/top10/{slug}/{films|tv}`（category `MOVIES`/`SERIES`，`slug` = `COUNTRIES` name 小写、空格转连字符）。`_build_rich_tasks` 组装「全球英语各 1 页 + 每所选国家 × 每所选类型各 1 页」的任务列表，`_run_rich_tasks` 用 **`concurrent.futures.ThreadPoolExecutor(max_workers)` 并发抓取**、`as_completed` 收集（结果按提交顺序产出以保证确定性，每页内按 rank 升序取前 `limit`），单页失败仅 `logger.warning` 跳过、提交/收集时检查 `context.event`。`_build_rich_item`：`title = clean_title or title`（优先干净剧名，识别更准）、`year = str(releaseYear)`、type_hint 按页面类型 films→MOVIE / tv→TV、剧集季号从完整 title 抽、`source_meta` 带 `video_id/rank/scope/category/source="rich"`、`unique_seed = f"{type_value}_{title_used}"`。**全球非英语两类无稳定富页 → 回退现有 `_fetch_global`（TSV title-only）**并记日志；全局 `seen` 去重贯穿富页与 TSV 回退两条路径。
-
----
-
-## 5. 状态机 `SubscribeStatus`（六态）
-
-`SubscribeExecutor.process` 的每条 item 最终落到以下六种状态之一（`core/models.py` 的 `str` 枚举），既是返回值 `SubscribeOutcome.status`，也是历史记录 `HistoryRecord.status`：
-
-| 状态 | 值 | 触发时机 | 是否记历史 |
-|------|-----|----------|------------|
-| `ALREADY_HANDLED` | `already_handled` | 去重键命中（`history.is_handled`）——之前已处理过 | 否（已有正向终态记录） |
-| `FILTERED` | `filtered` | pre 或 post 过滤器 reject（附 `reason`） | 是 |
-| `UNRECOGNIZED` | `unrecognized` | `recognize_media` 返回 `None`，无法识别为媒体 | 是 |
-| `MEDIA_EXISTS` | `media_exists` | 媒体库已完整存在（`get_no_exists_info` 返回 `True`） | 是 |
-| `SUBSCRIPTION_EXISTS` | `subscription_exists` | 订阅已存在（`subscribechain.exists` 返回 `True`） | 是 |
-| `SUBSCRIBED` | `subscribed` | 成功加订阅（`add` 返回有效 `sid`），记录 `subscribe_id` | 是 |
-
-补充：加订阅失败（`add` 返回空 `sid`）或单条处理抛异常时，落到 `ERROR`（值 `error`，附 `reason`），同样记历史并标记 handled。除 `ALREADY_HANDLED` 外的所有状态都会 `history.record(...)` 落一行；是否「已处理」由记录的 `status` 决定（仅正向终态算数），保证下次运行不重复处理，被过滤/未识别者仍可被其他渠道重试。
-
-状态转移始终**单向、就近短路**：一旦命中某状态即返回，不回溯、不继续后续步骤（详见 §2 数据流图）。
-
----
-
-## 6. 入口层横切能力
-
-除「定时 / 手动运行」外，`__init__.py`（入口层）还提供若干横切于各来源的能力：
-
-- **连通性测试**（`POST /providers/test` → `api_test_provider`）：只调 `provider.fetch` 消费前几条验证可达，**绝不进订阅管线、绝不订阅、绝不写历史**；以「spec 默认值兜底 + 用户已存配置覆盖」构造 options，并对带缓存的来源强制 `use_cache=False`（真实走网络而非产出旧缓存）。三层防抖：前端进行中禁用 + 冷却，后端同来源最小间隔 2s。
-- **订阅数据共享开关**（`GET/POST /system/share` → `api_get_share` / `api_set_share`）：读写主程序全局 `settings.SUBSCRIBE_STATISTIC_SHARE`，供热门媒体一键开启。经官方 `settings.update_setting` 落 `app.env` + 内存、即时生效无需重启，成功后广播 `ConfigChanged` 事件（被真实 OS 环境变量占用时拒写并如实回传）。
-- **状态检测（自动关闭空来源）**：`RankProvider.has_listening(options)` 声明「本来源在该配置下是否有任何可监听内容」（默认 `True`，各源复用其 `fetch` 内部判定重写；Mikan 始终有监听、不参与）。保存时前端即时判断、后端 `api_save_config` 调 `_auto_disable_empty_providers` 兜底：已启用却 `has_listening` 为假的来源自动置 `enabled=False`，避免空转（并防止绕过前端直接调 API 保存）。
-- **订阅管理**（`GET /subscribes`、`POST /subscribes/delete`、`POST /subscribes/state`）：列出 / 退订 / 暂停·恢复本插件创建的订阅。
-- **历史重新识别**（`POST /history/recognize`）：对「异常 / 未识别」历史记录还原 `RankMediaItem`，复用落地管线单条重跑识别与订阅（如未上映、季度预告等暂无 TMDB/Bangumi 记录的条目）。
-</content>
-</invoke>
-
-## 目标季与成功事实
-
-标题季号在预去重前解析；未知季不匹配任意单季，识别后再次按规范身份检查成功状态。媒体对象复制后再填入目标季，避免污染宿主缓存。
-
-`subscribe_history` 保存展示记录和原始候选快照；`subscribe_handled` 保存规范身份与精确候选别名。未知季候选不绑定跨季别名。成功记录不被后续过滤/异常降级，展示修剪不删成功账本，显式删除或清空才解除对应处理状态。
-
-表结构初始化使用 engine 弱引用及共享锁；旧表按列补齐候选字段。KV 迁移必须先归档，部分写入失败保留待重试源，重跑不覆盖较新的数据库记录。
+前端在 `frontend/` 执行 `npm test`、`npm run build`；行为测试运行实际组件脚本与 Vue 响应式逻辑，浏览器联调仍需真实宿主或明确标识的内存预览。前端入口与构建步骤见[前端说明](../frontend/README.md)。

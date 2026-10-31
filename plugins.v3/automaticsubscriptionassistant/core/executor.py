@@ -20,6 +20,7 @@ from app.schemas.types import MediaSource, MediaType
 from app.sdk.logging import logger
 from app.sdk.media import MetaInfo, resolve_media_identity
 
+from .blacklist import BLACKLIST_LOCK, BlacklistStore
 from .dedup import SubscribedIndex
 from .models import HistoryRecord, RankMediaItem, SubscribeOutcome, SubscribeStatus, media_identity
 
@@ -42,6 +43,8 @@ class SubscribeExecutor:
                  subscribed_index: Optional[SubscribedIndex] = None):
         self.ctx = context
         self.gcfg = global_config
+        self.blacklist = BlacklistStore(getattr(context, "get_data", None),
+                                        getattr(context, "save_data", None))
         # 已订阅强标识索引（跨渠道 + 与已订阅去重的快速路径）。缺省空索引 → 无快速路径、向后兼容。
         self.index = subscribed_index if subscribed_index is not None else SubscribedIndex()
 
@@ -67,6 +70,9 @@ class SubscribeExecutor:
         identity = item.identity()
         candidate_key = item.candidate_key()
         candidate_is_exact = item.type_hint == MediaType.MOVIE or item.season is not None
+
+        if self.blacklist.match(item):
+            return self._blocked(item, provider, history)
 
         # 1. 预去重快速路径：强标识命中「已订阅 / 本轮已处理」→ 跳过识别。
         if self.index.contains(item):
@@ -114,6 +120,11 @@ class SubscribeExecutor:
         # 宿主返回的媒体对象可能来自共享缓存，目标季/剧集组只能写入本次副本。
         mediainfo = deepcopy(mediainfo)
         sub_season = item.season if item.season is not None else mediainfo.season
+        # 整剧忽略无需先确定订阅季，避免被「季号不明确」分支抢先短路。
+        if self.blacklist.match(mediainfo, season=sub_season if is_tv else None):
+            blocked_identity = self._identity(item, mediainfo, sub_season if is_tv else None)
+            return self._blocked(item, provider, history, mediainfo,
+                                 sub_season if is_tv else None, blocked_identity)
         if is_tv and sub_season is None:
             seasons = [number for number in (mediainfo.seasons or {}) if number > 0]
             if len(seasons) == 1:
@@ -140,6 +151,11 @@ class SubscribeExecutor:
             f"id={self._resolve_identity(mediainfo)[1] or '-'} "
             f"季={sub_season if is_tv else '-'}"
         )
+
+        # 唯一可用季可能刚由 seasons 推导得到，补查指定季规则。
+        if self.blacklist.match(mediainfo, season=sub_season if is_tv else None):
+            return self._blocked(item, provider, history, mediainfo,
+                                 sub_season if is_tv else None, rid)
 
         # 原始榜单身份可能与宿主规范身份不同，识别后仍须查持久成功状态。
         if history.is_handled(rid):
@@ -179,18 +195,23 @@ class SubscribeExecutor:
             self._record(history, rid, provider, item, mediainfo, sub_season,
                          SubscribeStatus.ERROR, reason)
             return SubscribeOutcome(SubscribeStatus.ERROR, item, mediainfo=mediainfo, reason=reason)
-        sid, err = self.ctx.subscribechain.add(
-            title=mediainfo.title,
-            year=mediainfo.year,
-            mtype=mediainfo.type,
-            media_source=media_source,
-            media_id=media_id,
-            episode_group=episode_group,
-            season=sub_season if is_tv else None,
-            music_type=getattr(mediainfo, "music_type", None),
-            exist_ok=self.gcfg.exist_ok,
-            username=self.gcfg.username,
-        )
+        with BLACKLIST_LOCK:
+            if (self.blacklist.match(item)
+                    or self.blacklist.match(mediainfo, season=sub_season if is_tv else None)):
+                return self._blocked(item, provider, history, mediainfo,
+                                     sub_season if is_tv else None, rid)
+            sid, err = self.ctx.subscribechain.add(
+                title=mediainfo.title,
+                year=mediainfo.year,
+                mtype=mediainfo.type,
+                media_source=media_source,
+                media_id=media_id,
+                episode_group=episode_group,
+                season=sub_season if is_tv else None,
+                music_type=getattr(mediainfo, "music_type", None),
+                exist_ok=self.gcfg.exist_ok,
+                username=self.gcfg.username,
+            )
         if sid:
             self._record(history, rid, provider, item, mediainfo, sub_season,
                          SubscribeStatus.SUBSCRIBED, None, subscribe_id=sid)
@@ -200,6 +221,13 @@ class SubscribeExecutor:
                                     subscribe_id=sid, message=err)
         self._record(history, rid, provider, item, mediainfo, sub_season, SubscribeStatus.ERROR, err)
         return SubscribeOutcome(SubscribeStatus.ERROR, item, mediainfo=mediainfo, reason=err)
+
+    def _blocked(self, item, provider, history, mediainfo=None, season=None, identity=None):
+        reason = "已加入黑名单，忽略自动订阅"
+        self._record(history, identity or item.identity(), provider, item, mediainfo, season,
+                     SubscribeStatus.BLACKLISTED, reason)
+        # 忽略不是成功终态，移除黑名单后无需清除去重标记即可重新评估。
+        return SubscribeOutcome(SubscribeStatus.BLACKLISTED, item, mediainfo=mediainfo, reason=reason)
 
     def _mark_done(self, history, identity, mediainfo, season, episode_group=None) -> None:
         """正向终态收尾：标记已处理并登记进已订阅索引，供本轮后续渠道跳过。"""

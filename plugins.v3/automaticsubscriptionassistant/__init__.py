@@ -23,10 +23,12 @@ from app.schemas.types import EventType, MediaType
 from app.sdk.config import settings
 from app.sdk.events import eventmanager
 from app.sdk.logging import logger
+from app.sdk.media import MetaInfo
 from app.sdk.scheduler import update_plugin_job
 
 from .core.config import PluginSettings, ProviderConfig, build_defaults
 from .core.dedup import SubscribedIndex, build_subscribed_index
+from .core.blacklist import BlacklistApiMixin, media_snapshot
 from .core.executor import SubscribeExecutor
 from .core.filters import build_filter_chain
 from .core.history import HistoryStore
@@ -47,7 +49,7 @@ except Exception as _exc:  # noqa: BLE001
     logger.error(f"自动订阅助手：来源模块加载失败，暂无可用来源: {_exc}")
 
 
-class AutomaticSubscriptionAssistant(_PluginBase):
+class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     """多来源榜单自动订阅助手（Vue 联邦渲染）。"""
 
     # 插件名称
@@ -57,7 +59,7 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.1.1"
+    plugin_version = "3.2.0"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -164,6 +166,11 @@ class AutomaticSubscriptionAssistant(_PluginBase):
         defaults = build_defaults([provider.get_spec() for provider in self._providers])
         return None, defaults
 
+    def get_sidebar_nav(self):
+        """以插件名称和订阅图标显示侧栏入口，默认进入黑名单。"""
+        return [{"nav_key": "blacklist", "title": self.plugin_name, "icon": "mdi-rss",
+                 "section": "subscribe", "permission": "subscribe", "order": 30}]
+
     def get_page(self) -> Optional[List[dict]]:
         """Vue 模式无需 Vuetify 详情页，历史由前端 Page 组件经 API 渲染。"""
         return None
@@ -176,7 +183,9 @@ class AutomaticSubscriptionAssistant(_PluginBase):
         self, key: str = "", **kwargs
     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
         """Vue 模式仪表盘：返回列宽配置 + 全局属性；元素为 None，
-        由前端 Dashboard 组件经 /status、/history 接口自绘真实统计。"""
+        由前端 Dashboard 组件经 /dashboard 接口读取概览数据。"""
+        if key not in ("", "overview"):
+            return None
         cols = {"cols": 12, "md": 6}
         attrs = {
             "border": True,
@@ -400,6 +409,16 @@ class AutomaticSubscriptionAssistant(_PluginBase):
     def get_api(self) -> List[Dict[str, Any]]:
         """注册插件 API 端点（读取类走 bear，删除类可用 apikey）。"""
         return [
+            {"path": "/dashboard", "endpoint": self.api_dashboard, "methods": ["GET"],
+             "auth": "bear", "summary": "仪表盘概览", "description": "汇总当前订阅、黑名单、来源运行状态与最近订阅"},
+            {"path": "/blacklist", "endpoint": self.api_blacklist, "methods": ["GET"],
+             "auth": "bear", "summary": "黑名单", "description": "列出手动忽略的影视"},
+            {"path": "/blacklist/add", "endpoint": self.api_blacklist_add, "methods": ["POST"],
+             "auth": "bear", "summary": "加入黑名单", "description": "手动添加或从历史/订阅添加"},
+            {"path": "/blacklist/delete", "endpoint": self.api_blacklist_delete, "methods": ["POST"],
+             "auth": "bear", "summary": "移除黑名单", "description": "移除选中的忽略规则"},
+            {"path": "/subscribes/block", "endpoint": self.api_subscribes_block, "methods": ["POST"],
+             "auth": "bear", "summary": "退订并忽略", "description": "保存黑名单后退订，防止自动重建"},
             {
                 "path": "/providers", "endpoint": self.api_providers, "methods": ["GET"],
                 "auth": "bear", "summary": "来源列表", "description": "返回所有来源的元描述 spec",
@@ -584,6 +603,27 @@ class AutomaticSubscriptionAssistant(_PluginBase):
             "stats": store.stats(),
             "running": running,
         }
+
+    def api_dashboard(self, lang: str = None) -> Dict[str, Any]:
+        """提供只读概览；历史条数为当前保留量，不冒充累计订阅或执行次数。"""
+        try:
+            status = self.api_status(lang=lang)
+            subscriptions = self.__subscribe_manager().list_mine()
+            recent, _ = self.__history_store().query(status="subscribed", page=1, count=5)
+            return {
+                "code": 0,
+                **status,
+                "counts": {
+                    "history": status["stats"]["total"],
+                    "subscriptions": len(subscriptions),
+                    "paused": sum(row.get("state") == "S" for row in subscriptions),
+                    "blacklist": len(self.blacklist_store().list()),
+                },
+                "recent": recent,
+            }
+        except Exception as exc:  # noqa: BLE001 - 单个组件失败不影响宿主仪表盘
+            logger.error(f"{self.plugin_name}：读取仪表盘概览失败: {exc}")
+            return {"code": 1, "message": "读取仪表盘概览失败，请稍后重试"}
 
     def api_run(self, request: dict = None, provider_id: str = None) -> Dict[str, Any]:
         """触发指定来源在 3 秒后运行一次（provider_id 支持 body 或 query）。"""
@@ -793,6 +833,30 @@ class AutomaticSubscriptionAssistant(_PluginBase):
         return SubscribeManager(SubscribeOper(),
                                 username=self._settings.global_config.username,
                                 on_deleted=_on_deleted)
+
+    def blacklist_resolve_media(self, media):
+        """仅识别整剧身份，补充跨季忽略别名；不触发订阅。"""
+        snapshot = media_snapshot(media)
+        meta = MetaInfo(snapshot["title"])
+        meta.type = MediaType(snapshot["type"])
+        if snapshot["year"]:
+            meta.year = snapshot["year"]
+        source = media.get("media_source")
+        media_id = media.get("media_id")
+        if not source or not media_id:
+            source, media_id = next(iter(snapshot["ids"].items()))
+            if source == "tmdb":
+                source = "themoviedb"
+        return self.chain.recognize_media(meta=meta, media_source=source, media_id=media_id,
+                                          mtype=MediaType(snapshot["type"]))
+
+    def blacklist_history_store(self):
+        """供黑名单入口复用版本对应的历史仓库。"""
+        return self.__history_store()
+
+    def blacklist_subscribe_manager(self):
+        """黑名单写操作沿用本插件订阅的归属检查。"""
+        return self.__subscribe_manager()
 
     def api_subscribes(self) -> Dict[str, Any]:
         """列出本插件创建的订阅。"""
