@@ -38,6 +38,8 @@
       <v-btn :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-bell-off-outline" @click="askBatch('delete')">{{ t('unsub') }}</v-btn>
     </div>
 
+    <v-btn v-if="selectMode" :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-cancel" class="mb-3" @click="openBlacklist()">{{ t('block') }}</v-btn>
+
     <v-alert v-if="error" class="mb-3" density="compact" type="warning" variant="tonal">{{ error }}</v-alert>
 
     <!-- 加载骨架：数量跟随每页条数，与数据网格等高，避免切换/翻页闪烁 -->
@@ -67,12 +69,15 @@
         @toggle="toggleOne(item.id)"
       >
         <template #actions>
+          <v-list-item base-color="error" prepend-icon="mdi-cancel" :title="t('block')" @click="openBlacklist(item)" />
           <v-list-item v-if="item.state === 'S'" base-color="success" prepend-icon="mdi-play" :title="t('resume')" @click="askOne('resume', item)" />
           <v-list-item v-else base-color="warning" prepend-icon="mdi-pause" :title="t('pause')" @click="askOne('pause', item)" />
           <v-list-item base-color="error" prepend-icon="mdi-bell-off-outline" :title="t('unsub')" @click="askOne('delete', item)" />
         </template>
       </MediaCard>
     </div>
+
+    <BlacklistDialog v-model="blacklistOpen" :api="api" :target="blacklistTarget" @saved="blocked" />
 
     <!-- 二次确认对话框 -->
     <v-dialog v-model="confirm.open" max-width="380">
@@ -110,6 +115,7 @@
 <script setup>
 import { computed, getCurrentInstance, onMounted, reactive, ref, watch } from 'vue'
 import MediaCard from './MediaCard.vue'
+import BlacklistDialog from './BlacklistDialog.vue'
 import FilterPanel from './FilterPanel.vue'
 
 const props = defineProps({
@@ -132,7 +138,7 @@ const MSG = {
   'zh-CN': {
     select: '多选', exitSelect: '退出多选', selectedN: '已选 {n} 项', searchPh: '搜索名称…',
     selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
-    resume: '恢复', pause: '暂停', unsub: '退订', cancel: '取消', ok: '确定', unknown: '未知', more: '更多',
+    block: '退订并加入黑名单', resume: '恢复', pause: '暂停', unsub: '退订', cancel: '取消', ok: '确定', unknown: '未知', more: '更多',
     all: '全部', 'st.R': '订阅中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暂停',
     filter: '筛选', filterTitle: '筛选与搜索', filterType: '类型', filterStatus: '状态', filterYear: '发行年份',
     yearFrom: '起始年', yearTo: '结束年', filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
@@ -147,7 +153,7 @@ const MSG = {
   'zh-TW': {
     select: '多選', exitSelect: '退出多選', selectedN: '已選 {n} 項', searchPh: '搜尋名稱…',
     selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
-    resume: '恢復', pause: '暫停', unsub: '退訂', cancel: '取消', ok: '確定', unknown: '未知', more: '更多',
+    block: '退訂並加入黑名單', resume: '恢復', pause: '暫停', unsub: '退訂', cancel: '取消', ok: '確定', unknown: '未知', more: '更多',
     all: '全部', 'st.R': '訂閱中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暫停',
     filter: '篩選', filterTitle: '篩選與搜尋', filterType: '類型', filterStatus: '狀態', filterYear: '發行年份',
     yearFrom: '起始年', yearTo: '結束年', filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
@@ -162,7 +168,7 @@ const MSG = {
   'en-US': {
     select: 'Select', exitSelect: 'Done', selectedN: '{n} selected', searchPh: 'Search name…',
     selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
-    resume: 'Resume', pause: 'Pause', unsub: 'Unsubscribe', cancel: 'Cancel', ok: 'OK', unknown: 'Unknown', more: 'More',
+    block: 'Unsubscribe and blacklist', resume: 'Resume', pause: 'Pause', unsub: 'Unsubscribe', cancel: 'Cancel', ok: 'OK', unknown: 'Unknown', more: 'More',
     all: 'All', 'st.R': 'Active', 'st.N': 'New', 'st.P': 'Pending', 'st.S': 'Paused',
     filter: 'Filters', filterTitle: 'Filter & search', filterType: 'Type', filterStatus: 'Status', filterYear: 'Release year',
     yearFrom: 'From', yearTo: 'To', filterAll: 'All', searchLabel: 'Search', applyFilter: 'Apply', resetFilter: 'Reset',
@@ -190,6 +196,22 @@ function t(k, p) {
   return s
 }
 
+const blacklistOpen = ref(false)
+const blacklistTarget = ref({})
+function openBlacklist(item) {
+  const targets = item ? [item] : rows.value.filter(row => selected.has(row.id))
+  if (!targets.length) return
+  const single = targets.length === 1 ? targets[0] : null
+  blacklistTarget.value = { kind: 'unsubscribe', ids: targets.map(row => row.id), title: single?.name,
+    type: single?.type, season: single?.season }
+  blacklistOpen.value = true
+}
+async function blocked(result) {
+  for (const id of result.ok_ids || []) selected.delete(id)
+  for (const id of result.failed_ids || []) selected.add(id)
+  await fetchSubs()
+  emit('changed')
+}
 const loading = ref(true)
 const error = ref('')
 const rows = ref([])

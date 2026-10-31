@@ -103,6 +103,7 @@
             @toggle="toggleOne(item.unique)"
           >
             <template #actions>
+              <v-list-item prepend-icon="mdi-cancel" :title="t('blacklistAdd')" @click="openBlacklist(item)" />
               <v-list-item
                 v-if="['error', 'unrecognized'].includes(item.status)"
                 prepend-icon="mdi-refresh" :title="t('reRecognize')"
@@ -119,7 +120,17 @@
       </div>
 
       <!-- 订阅管理 -->
+      <BlacklistView
+        v-else-if="view === 'blacklist'"
+        ref="blacklistRef"
+        class="asa-pg-body"
+        :api="api"
+        :page-size="pageSize"
+        v-model:page="blacklistPage"
+        @update:page-count="v => blacklistCount = v"
+      />
       <SubscribeView
+        ref="subscribeRef"
         v-else
         class="asa-pg-body"
         :api="api"
@@ -144,8 +155,13 @@
           @update:model-value="onPageChange"
         />
         <v-pagination
-          v-else
+          v-else-if="view === 'manage'"
           v-model="managePage" active-color="primary" density="comfortable" :length="manageCount"
+          :total-visible="paginationVisible" :size="paginationSize"
+        />
+        <v-pagination
+          v-else
+          v-model="blacklistPage" active-color="primary" density="comfortable" :length="blacklistCount"
           :total-visible="paginationVisible" :size="paginationSize"
         />
       </div>
@@ -200,6 +216,8 @@
       </v-card>
     </v-dialog>
 
+    <BlacklistDialog v-model="blacklistOpen" :api="api" :target="blacklistTarget" @saved="fetchStatus" />
+
     <!-- 二次确认（删除历史） -->
     <v-dialog v-model="confirm.open" max-width="380">
       <v-card>
@@ -237,13 +255,17 @@
 import { computed, getCurrentInstance, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import MediaCard from './MediaCard.vue'
 import SubscribeView from './SubscribeView.vue'
+import BlacklistView from './BlacklistView.vue'
+import BlacklistDialog from './BlacklistDialog.vue'
 import PluginTabs from './PluginTabs.vue'
 import FilterPanel from './FilterPanel.vue'
+import '../styles/mediaViews.css'
 import { useMediaGrid } from '../composables/useMediaGrid'
 
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
   show_switch: { type: Boolean, default: true },
+  initialView: { type: String, default: '' },
 })
 const emit = defineEmits(['switch', 'close', 'action'])
 
@@ -255,16 +277,17 @@ const STATUS_META = {
   subscribed: { color: 'success', icon: 'mdi-check-circle' },
   media_exists: { color: 'info', icon: 'mdi-database-check-outline' },
   subscription_exists: { color: 'primary', icon: 'mdi-bell-check-outline' },
+  blacklisted: { color: 'error', icon: 'mdi-cancel' },
   filtered: { color: 'warning', icon: 'mdi-filter-remove-outline' },
   unrecognized: { color: 'blue-grey', icon: 'mdi-help-circle-outline' },
   already_handled: { color: 'grey', icon: 'mdi-history' },
   error: { color: 'error', icon: 'mdi-alert-circle-outline' },
 }
-const STAT_ORDER = ['subscribed', 'media_exists', 'subscription_exists', 'filtered', 'unrecognized', 'error']
+const STAT_ORDER = ['subscribed', 'media_exists', 'subscription_exists', 'blacklisted', 'filtered', 'unrecognized', 'error']
 
 const MSG = {
   'zh-CN': {
-    plugin: '插件', appTitle: '自动订阅助手', title: '订阅历史', manageTitle: '订阅管理', config: '订阅配置',
+    blacklist: '黑名单', blacklistAdd: '加入黑名单', 'st.blacklisted': '已忽略', plugin: '插件', appTitle: '自动订阅助手', title: '订阅历史', manageTitle: '订阅管理', config: '订阅配置',
     records: '共 {n} 条记录', refresh: '刷新', close: '关闭', searchPh: '搜索名称…',
     filterSource: '来源', filterStatus: '状态', filterType: '类型', clearFilters: '清除筛选',
     filter: '筛选', filterTitle: '筛选与搜索', filterYear: '发行年份', yearFrom: '起始年', yearTo: '结束年',
@@ -283,7 +306,7 @@ const MSG = {
     'st.filtered': '被过滤', 'st.unrecognized': '未识别', 'st.already_handled': '已处理', 'st.error': '异常',
   },
   'zh-TW': {
-    plugin: '外掛', appTitle: '自動訂閱助手', title: '訂閱歷史', manageTitle: '訂閱管理', config: '訂閱設定',
+    blacklist: '黑名單', blacklistAdd: '加入黑名單', 'st.blacklisted': '已忽略', plugin: '外掛', appTitle: '自動訂閱助手', title: '訂閱歷史', manageTitle: '訂閱管理', config: '訂閱設定',
     records: '共 {n} 筆記錄', refresh: '重新整理', close: '關閉', searchPh: '搜尋名稱…',
     filterSource: '來源', filterStatus: '狀態', filterType: '類型', clearFilters: '清除篩選',
     filter: '篩選', filterTitle: '篩選與搜尋', filterYear: '發行年份', yearFrom: '起始年', yearTo: '結束年',
@@ -302,7 +325,7 @@ const MSG = {
     'st.filtered': '被過濾', 'st.unrecognized': '未識別', 'st.already_handled': '已處理', 'st.error': '異常',
   },
   'en-US': {
-    plugin: 'Plugin', appTitle: 'Auto Subscribe', title: 'History', manageTitle: 'Manage', config: 'Settings',
+    blacklist: 'Blacklist', blacklistAdd: 'Add to blacklist', 'st.blacklisted': 'Ignored', plugin: 'Plugin', appTitle: 'Auto Subscribe', title: 'History', manageTitle: 'Manage', config: 'Settings',
     records: '{n} records', refresh: 'Refresh', close: 'Close', searchPh: 'Search name…',
     filterSource: 'Source', filterStatus: 'Status', filterType: 'Type', clearFilters: 'Clear filters',
     filter: 'Filters', filterTitle: 'Filter & search', filterYear: 'Release year', yearFrom: 'From', yearTo: 'To',
@@ -338,12 +361,19 @@ function t(k, p) {
 function statusMeta(status) { return STATUS_META[status] || { color: 'grey', icon: 'mdi-help-circle-outline' } }
 function statusLabel(status) { return STATUS_META[status] ? t('st.' + status) : (status || t('unknown')) }
 
-const view = ref(readInitialView())
+const blacklistRef = ref(null)
+const subscribeRef = ref(null)
+const blacklistOpen = ref(false)
+const blacklistTarget = ref({})
+function openBlacklist(item) { blacklistTarget.value = { ...item, kind: 'history' }; blacklistOpen.value = true }
+const view = ref(props.initialView || readInitialView())
 const loading = ref(true)
 const error = ref('')
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
+const blacklistPage = ref(1)
+const blacklistCount = ref(1)
 const managePage = ref(1)
 const manageCount = ref(1)
 const jumpTo = ref(1)
@@ -373,7 +403,7 @@ const deletingBatch = ref(false)
 function readInitialView() {
   try {
     const v = localStorage.getItem(VIEW_KEY)
-    if (v === 'manage' || v === 'history') { localStorage.removeItem(VIEW_KEY); return v }
+    if (v === 'manage' || v === 'history' || v === 'blacklist') { localStorage.removeItem(VIEW_KEY); return v }
   } catch { /* ignore */ }
   return 'history'
 }
@@ -392,7 +422,7 @@ const pageSize = computed(() => (isSingleCol.value ? mobileRows.value : Math.max
 
 const showSwitch = computed(() => props.show_switch)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-const activePageCount = computed(() => (view.value === 'history' ? pageCount.value : manageCount.value))
+const activePageCount = computed(() => (view.value === 'history' ? pageCount.value : view.value === 'blacklist' ? blacklistCount.value : manageCount.value))
 // 移动端不锁死 total-visible → v-pagination 依据自身容器宽度自动截断（永远含首尾页）；桌面维持 5。
 // 固定可见页码数（不依赖 ResizeObserver 自动截断，避免真机测量不准导致页码数字消失）；
 // 每页行数/跳转已移入弹窗，页脚仅页码 + 设置按钮，空间充裕，固定 5 个不会溢出。
@@ -407,6 +437,7 @@ const tabDefs = computed(() => {
   const base = [
     { key: 'history', label: t('title'), icon: 'mdi-history' },
     { key: 'manage', label: t('manageTitle'), icon: 'mdi-bell-cog-outline' },
+    { key: 'blacklist', label: t('blacklist'), icon: 'mdi-cancel' },
   ]
   if (showSwitch.value) base.push({ key: 'config', label: t('config'), icon: 'mdi-cog-outline' })
   return base
@@ -535,6 +566,8 @@ function onTab(key) {
 function reloadCurrent() {
   fetchStatus()
   if (view.value === 'history') fetchHistory()
+  else if (view.value === 'blacklist') blacklistRef.value?.reload()
+  else subscribeRef.value?.reload()
 }
 function applyFilters() { page.value = 1; fetchHistory() }
 // 统计卡片点击：切换该状态在多选集合中的存在。
@@ -557,6 +590,8 @@ function doJump() {
   const n = Math.min(Math.max(parseInt(jumpTo.value, 10) || 1, 1), activePageCount.value)
   if (view.value === 'history') {
     if (n !== page.value) { page.value = n; onPageChange() }
+  } else if (view.value === 'blacklist') {
+    blacklistPage.value = n
   } else {
     managePage.value = n
   }
@@ -616,7 +651,7 @@ async function runDelete() {
 
 function onRowsChange() {
   try { localStorage.setItem(ROWS_KEY, String(mobileRows.value)) } catch { /* ignore */ }
-  page.value = 1; managePage.value = 1
+  page.value = 1; managePage.value = 1; blacklistPage.value = 1
 }
 
 // 重新识别一条异常记录：部分媒体（未上映/季度预告）识别时 tmdb/bangumi 尚无记录而异常，
@@ -644,6 +679,7 @@ async function reRecognize(item) {
 // 每页条数变化（列数变化或移动端改行数）→ 历史静默重取；订阅管理由 pageSize prop 响应式重切。
 watch(pageSize, () => { if (view.value === 'history') fetchHistory(true) })
 // 订阅管理页数变化时收敛当前页；切换视图后清空选择并重新测量网格列数。
+watch(blacklistCount, c => { if (blacklistPage.value > c) blacklistPage.value = c })
 watch(manageCount, c => { if (managePage.value > c) managePage.value = c })
 watch(view, () => {
   selectionSeq++
@@ -705,32 +741,11 @@ onMounted(() => { fetchStatus(); fetchHistory() })
 .asa-stat--error { --asa-c: var(--v-theme-error); }
 .asa-stat--blue-grey, .asa-stat--grey { --asa-c: var(--v-theme-secondary); }
 
-.asa-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-.asa-filters__trigger { position: relative; }
-.asa-filters__badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-inline-size: 18px; block-size: 18px; margin-inline-start: 6px; padding: 0 5px;
-  border-radius: 9px; background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary));
-  font-size: 0.7rem; font-weight: 700; line-height: 1;
-}
-.asa-filters__clear { color: rgba(var(--v-theme-on-surface), 0.7); }
-.asa-filter-dlg__title { display: flex; align-items: center; gap: 8px; font-size: 1rem; font-weight: 700; }
-.asa-filter-dlg__body { padding-block: 10px 6px; }
-
 .asa-batch {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; padding: 6px 12px;
   border-radius: 10px; background: rgba(var(--v-theme-primary), 0.06); border: 1px solid rgba(var(--v-theme-primary), 0.16);
 }
 .asa-batch__count { font-size: 0.8rem; font-weight: 600; color: rgba(var(--v-theme-on-surface), 0.8); margin-inline-end: 4px; }
-
-.asa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
-.asa-skel-card { block-size: 116px; border-radius: var(--asa-radius); background: rgba(var(--v-theme-on-surface), 0.08); animation: asa-pulse 1.4s ease infinite; }
-@keyframes asa-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-
-.asa-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px; text-align: center; }
-.asa-empty__ico { display: flex; align-items: center; justify-content: center; inline-size: 60px; block-size: 60px; border-radius: 50%; background: rgba(var(--v-theme-primary), 0.1); color: rgb(var(--v-theme-primary)); }
-.asa-empty__text { margin: 4px 0 0; font-size: 0.95rem; font-weight: 600; }
-.asa-empty__hint { margin: 0; color: rgba(var(--v-theme-on-surface), 0.55); font-size: 0.78rem; }
 
 .asa-pg-foot {
   position: sticky; z-index: 4; inset-block-end: 0;
@@ -764,7 +779,6 @@ onMounted(() => { fetchStatus(); fetchHistory() })
 .asa-foot-dlg__jump .v-btn { block-size: 40px; }
 
 @container (width < 480px) {
-  .asa-grid { grid-template-columns: 1fr; }
   .asa-stats { grid-template-columns: 1fr; gap: 6px; }
   .asa-stat { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; }
   .asa-stat__num { order: 2; font-size: 1.15rem; }
@@ -772,6 +786,5 @@ onMounted(() => { fetchStatus(); fetchHistory() })
 }
 @media (prefers-reduced-motion: reduce) {
   .asa-stat { transition: none; }
-  .asa-skel-card { animation: none; }
 }
 </style>

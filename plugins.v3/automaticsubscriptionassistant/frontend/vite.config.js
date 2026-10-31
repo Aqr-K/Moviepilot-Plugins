@@ -23,6 +23,8 @@ export default defineConfig(({ command }) => ({
       filename: 'remoteEntry.js',
       exposes: {
         './Page': './src/components/Page.vue',
+        './AppPage': './src/components/AppPage.vue',
+        './AppPageBlacklist': './src/components/AppPageBlacklist.vue',
         './Config': './src/components/Config.vue',
         './Dashboard': './src/components/Dashboard.vue',
       },

@@ -1,0 +1,28 @@
+/* 订阅历史与黑名单共用的工具栏、弹窗、网格和空状态。 */
+.asa-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.asa-filters__trigger { position: relative; }
+.asa-filters__badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-inline-size: 18px; block-size: 18px; margin-inline-start: 6px; padding: 0 5px;
+  border-radius: 9px; background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary));
+  font-size: 0.7rem; font-weight: 700; line-height: 1;
+}
+.asa-filters__clear { color: rgba(var(--v-theme-on-surface), 0.7); }
+.asa-filter-dlg .asa-filter-dlg__title { display: flex; align-items: center; gap: 8px; font-size: 1rem; font-weight: 700; }
+.asa-filter-dlg .asa-filter-dlg__body { padding-block: 10px 6px; }
+
+.asa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.asa-skel-card { block-size: 116px; border-radius: var(--asa-radius); background: rgba(var(--v-theme-on-surface), 0.08); animation: asa-pulse 1.4s ease infinite; }
+@keyframes asa-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.asa-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px; text-align: center; }
+.asa-empty__ico { display: flex; align-items: center; justify-content: center; inline-size: 60px; block-size: 60px; border-radius: 50%; background: rgba(var(--v-theme-primary), 0.1); color: rgb(var(--v-theme-primary)); }
+.asa-empty__text { margin: 4px 0 0; font-size: 0.95rem; font-weight: 600; }
+.asa-empty__hint { margin: 0; color: rgba(var(--v-theme-on-surface), 0.55); font-size: 0.78rem; }
+
+@container (width < 480px) {
+  .asa-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .asa-skel-card { animation: none; }
+}
