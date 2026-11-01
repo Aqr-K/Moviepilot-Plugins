@@ -17,13 +17,13 @@ from apscheduler.triggers.cron import CronTrigger
 from app.chain.download import DownloadChain
 from app.chain.subscribe import SubscribeChain
 from app.db.oper.subscribe import SubscribeOper
-from app.plugins import _PluginBase
 from app.schemas.event import ConfigChangeEventData
 from app.schemas.types import EventType, MediaType
 from app.sdk.config import settings
 from app.sdk.events import eventmanager
 from app.sdk.logging import logger
 from app.sdk.media import MetaInfo
+from app.sdk.plugin import _PluginBase
 from app.sdk.scheduler import update_plugin_job
 
 from .core.config import PluginSettings, ProviderConfig, build_defaults
@@ -38,7 +38,8 @@ from .core.models import RankMediaItem
 from .core.provider import ProviderContext
 from .core.registry import registry
 from .core.runner import ProviderRunner
-from .core.subscribes import SubscribeManager
+from .core.subscribes import SubscribeManager, list_subscriptions
+from .core.supplement import HistorySupplementService
 from .core.tables import MODELS
 
 # 导入 providers 包会触发各来源类的 @register 注册。providers 由并行流程提供，
@@ -59,7 +60,7 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.2.0"
+    plugin_version = "3.3.0"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -167,7 +168,7 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         return None, defaults
 
     def get_sidebar_nav(self):
-        """以插件名称和订阅图标显示侧栏入口，默认进入黑名单。"""
+        """以插件名称和订阅图标显示侧栏入口，默认进入订阅历史。"""
         return [{"nav_key": "blacklist", "title": self.plugin_name, "icon": "mdi-rss",
                  "section": "subscribe", "permission": "subscribe", "order": 30}]
 
@@ -315,9 +316,13 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         self.__reset_oneshot_flags(reset_onlyonce=True, reset_clear=False)
 
     def __build_subscribed_index(self) -> SubscribedIndex:
-        """预加载当前全部订阅为强标识索引；失败兜底空索引（exists() 仍兜底，安全）。"""
+        """
+        通过官方查询 SDK 预加载当前全部订阅的强标识索引。
+
+        :return: 订阅索引；查询失败时返回空索引，由宿主 exists() 继续兜底
+        """
         try:
-            subscriptions = SubscribeOper().list()
+            subscriptions = list_subscriptions()
             index = build_subscribed_index(subscriptions)
             logger.info(f"{self.plugin_name}：预加载已订阅 {len(subscriptions or [])} 条用于预去重")
             return index
@@ -409,6 +414,8 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     def get_api(self) -> List[Dict[str, Any]]:
         """注册插件 API 端点（读取类走 bear，删除类可用 apikey）。"""
         return [
+            {"path": "/history/supplement", "endpoint": self.api_history_supplement, "methods": ["POST"],
+             "auth": "bear", "summary": "补充编辑并添加订阅", "description": "手动补充媒体身份和订阅设置，重新识别后新增订阅"},
             {"path": "/dashboard", "endpoint": self.api_dashboard, "methods": ["GET"],
              "auth": "bear", "summary": "仪表盘概览", "description": "汇总当前订阅、黑名单、来源运行状态与最近订阅"},
             {"path": "/blacklist", "endpoint": self.api_blacklist, "methods": ["GET"],
@@ -814,14 +821,35 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         return {"code": 0, "status": outcome.status.value,
                 "reason": getattr(outcome, "reason", None), "message": "重新识别完成"}
 
+    def api_history_supplement(self, request: dict = None) -> Dict[str, Any]:
+        """从历史补充媒体定义和订阅参数，重新识别并尝试新增。"""
+        context = ProviderContext(chain=self.chain, downloadchain=self._downloadchain,
+                                  subscribechain=self._subscribechain, logger=logger, event=self._event,
+                                  get_data=self.get_data, save_data=self.save_data)
+        try:
+            return HistorySupplementService(context, self._settings.global_config,
+                                            self.__history_store()).submit(request)
+        except ValueError as exc:
+            return {"code": 1, "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - 不影响自动来源任务
+            logger.error(f"{self.plugin_name}：补充编辑订阅失败: {exc}")
+            return {"code": 1, "message": "创建订阅失败，请查看日志后重试"}
+
     # ------------------------------------------------------------------ #
     # 订阅手动管理
     # ------------------------------------------------------------------ #
     def __subscribe_manager(self) -> SubscribeManager:
-        """构造订阅管理器：退订回调发送主程序标准 SubscribeDeleted 事件。"""
+        """
+        构造订阅管理器，退订回调发送主程序标准 SubscribeDeleted 事件。
+
+        :return: 通过 SDK 快照查询并复核归属的订阅管理器
+        """
         def _on_deleted(sid, sub):
+            """
+            将删除前的 SDK 订阅快照转成事件数据并通知宿主。
+            """
             try:
-                info = {c.name: sub.__dict__.get(c.name) for c in sub.__table__.columns}
+                info = sub.model_dump(mode="json")
             except Exception:  # noqa: BLE001 - 快照失败退化为最小负载
                 info = {"media_source": getattr(sub, "media_source", None),
                         "media_id": getattr(sub, "media_id", None)}

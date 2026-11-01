@@ -1,51 +1,56 @@
 <template>
   <div class="bl-view">
-    <div class="asa-filters">
-      <v-btn
-        class="asa-filters__trigger"
-        :color="hasFilter ? 'primary' : undefined"
-        prepend-icon="mdi-filter-variant"
-        size="small"
-        :variant="hasFilter ? 'tonal' : 'outlined'"
-        @click="openFilterDialog"
-      >
-        {{ t('filter') }}
-        <span v-if="activeFilterCount" class="asa-filters__badge">{{ activeFilterCount }}</span>
-      </v-btn>
-      <v-spacer />
-      <v-btn v-if="hasFilter" class="asa-filters__clear" size="small" variant="text" @click="clearFilters">
-        <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
-      </v-btn>
-      <v-btn prepend-icon="mdi-plus" size="small" color="primary" variant="tonal" @click="addOpen = true">{{ t('add') }}</v-btn>
-    </div>
-    <p class="bl-hint">{{ t('hint') }}</p>
-    <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
-
-    <div v-if="loading" class="asa-grid">
-      <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
-    </div>
-    <div v-else-if="!filtered.length" class="asa-empty">
-      <div class="asa-empty__ico"><v-icon :icon="hasFilter ? 'mdi-filter-off-outline' : 'mdi-cancel'" size="30" /></div>
-      <p class="asa-empty__text">{{ t(hasFilter ? 'emptyFiltered' : 'emptyNone') }}</p>
-      <p class="asa-empty__hint">{{ t(hasFilter ? 'emptyFilteredHint' : 'emptyNoneHint') }}</p>
-      <v-btn v-if="hasFilter" size="small" variant="tonal" @click="clearFilters">{{ t('clearFilters') }}</v-btn>
-    </div>
-    <div v-else class="asa-grid">
-      <MediaCard
-        v-for="item in paged"
-        :key="item.id"
-        :poster="item.poster || ''"
-        :name="mediaName(item)"
-        :lines="lines(item)"
-        :status="{ label: t('ignored'), color: 'rgb(var(--v-theme-error))', icon: 'mdi-cancel' }"
-        :more-label="t('more')"
-      >
-        <template #actions>
-          <v-list-item prepend-icon="mdi-restore" :title="t('remove')" @click="removing = item" />
-        </template>
-      </MediaCard>
+    <div class="asa-pg-controls">
+      <div class="asa-filters">
+        <v-btn
+          class="asa-filters__trigger"
+          :color="hasFilter ? 'primary' : undefined"
+          prepend-icon="mdi-filter-variant"
+          size="small"
+          :variant="hasFilter ? 'tonal' : 'outlined'"
+          @click="openFilterDialog"
+        >
+          {{ t('filter') }}
+          <span v-if="activeFilterCount" class="asa-filters__badge">{{ activeFilterCount }}</span>
+        </v-btn>
+        <v-spacer />
+        <v-btn v-if="hasFilter" class="asa-filters__clear" size="small" variant="text" @click="clearFilters">
+          <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
+        </v-btn>
+        <v-btn prepend-icon="mdi-plus" size="small" color="primary" variant="tonal" @click="addOpen = true">{{ t('add') }}</v-btn>
+      </div>
+      <p class="bl-hint">{{ t('hint') }}</p>
+      <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
     </div>
 
+    <ProgressiveList ref="listRef" :progressive="progressive" :count="paged.length" :loading="loading"
+      :has-more="paged.length < filtered.length" @load="loadMore">
+      <div v-if="loading" class="asa-grid">
+        <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
+      </div>
+      <div v-else-if="!filtered.length" class="asa-empty">
+        <div class="asa-empty__ico"><v-icon :icon="hasFilter ? 'mdi-filter-off-outline' : 'mdi-cancel'" size="30" /></div>
+        <p class="asa-empty__text">{{ t(hasFilter ? 'emptyFiltered' : 'emptyNone') }}</p>
+        <p class="asa-empty__hint">{{ t(hasFilter ? 'emptyFilteredHint' : 'emptyNoneHint') }}</p>
+        <v-btn v-if="hasFilter" size="small" variant="tonal" @click="clearFilters">{{ t('clearFilters') }}</v-btn>
+      </div>
+      <div v-else class="asa-grid">
+        <MediaCard
+          v-for="item in paged"
+          :key="item.id"
+          :poster="item.poster || ''"
+          :name="mediaName(item)"
+          :lines="lines(item)"
+          :status="{ label: t('ignored'), color: 'rgb(var(--v-theme-error))', icon: 'mdi-cancel' }"
+          :more-label="t('more')"
+        >
+          <template #actions>
+            <v-list-item prepend-icon="mdi-restore" :title="t('remove')" @click="removing = item" />
+          </template>
+        </MediaCard>
+      </div>
+
+    </ProgressiveList>
     <v-dialog v-model="filterDialog" max-width="440" scrollable>
       <v-card class="asa-filter-dlg">
         <v-card-title class="asa-filter-dlg__title">
@@ -82,11 +87,13 @@ import { computed, getCurrentInstance, onMounted, reactive, ref, watch } from 'v
 import MediaCard from './MediaCard.vue'
 import BlacklistDialog from './BlacklistDialog.vue'
 import FilterPanel from './FilterPanel.vue'
+import ProgressiveList from './ProgressiveList.vue'
 import '../styles/mediaViews.css'
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
   pageSize: { type: Number, default: 12 },
   page: { type: Number, default: 1 },
+  progressive: Boolean,
 })
 const emit = defineEmits(['update:page', 'update:pageCount'])
 const MSG = {
@@ -139,7 +146,15 @@ const filtered = computed(() => {
   })
 })
 const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / props.pageSize)))
-const paged = computed(() => filtered.value.slice((props.page - 1) * props.pageSize, props.page * props.pageSize))
+const listRef = ref(null)
+const visibleCount = ref(props.pageSize)
+const paged = computed(() => props.progressive ? filtered.value.slice(0, visibleCount.value)
+  : filtered.value.slice((props.page - 1) * props.pageSize, props.page * props.pageSize))
+function loadMore() { visibleCount.value += props.pageSize }
+watch([filtered, () => props.progressive, () => props.pageSize], () => {
+  visibleCount.value = props.pageSize
+  if (props.progressive) listRef.value?.scrollToTop()
+})
 watch(pageCount, count => emit('update:pageCount', count), { immediate: true })
 watch(filters, () => emit('update:page', 1), { deep: true })
 function mediaName(item) {

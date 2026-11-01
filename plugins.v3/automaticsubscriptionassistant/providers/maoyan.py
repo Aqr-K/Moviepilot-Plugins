@@ -9,7 +9,7 @@
   —— 仅腾讯视频/爱奇艺/优酷有数据，各平台最新可用日期不同（先探测 calendarNet.selectMaxDate）。
 
 「网播热度」与「网络电影」按「平台 × 媒体类型」自由组合（前端 region-media-map 控件），
-值形态 ``{平台: [媒体类型, ...]}``。Cookie 通过 ``PlaywrightHelper`` 获取，失败降级空 dict。
+值形态 ``{平台: [媒体类型, ...]}``。Cookie 通过官方浏览器 SDK 获取，失败降级空 dict。
 年份由 releaseInfo（距今天数）反推，缺失或解析失败则置空。
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ import re
 from datetime import date, timedelta
 from typing import Dict, Iterator, List, Optional
 
-from app.adapters.network.browser import BrowserPage, PlaywrightHelper
 from app.schemas.types import MediaType
+from app.sdk.browser import launch_browser_context
 from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
@@ -336,16 +336,32 @@ class MaoyanRankProvider(RankProvider):
 
     @staticmethod
     def _get_cookies() -> dict:
-        """通过 MoviePilot 浏览器适配层获取猫眼 Cookie，失败降级空 dict。"""
-        def handler(page: BrowserPage) -> dict:
-            return {c["name"]: c["value"] for c in page.context.cookies()}
+        """
+        通过官方浏览器 SDK 获取猫眼 Cookie，结束后释放上下文及页面。
 
+        :return: 浏览器 Cookie；启动、导航或读取失败时返回空字典
+        """
+        context = None
         try:
-            return PlaywrightHelper().action(
-                url=MAOYAN_URL, callback=handler, headless=True) or {}
+            context = launch_browser_context(
+                headless=True, humanize=settings.CLOAKBROWSER_HUMANIZE,
+                human_preset=settings.CLOAKBROWSER_HUMAN_PRESET)
+            page = context.new_page()
+            page.goto(MAOYAN_URL, wait_until="domcontentloaded", timeout=60_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:  # noqa: BLE001 - 长连接不应阻止读取已经取得的 Cookie
+                pass
+            return {cookie["name"]: cookie["value"] for cookie in context.cookies()}
         except Exception as err:  # noqa: BLE001 - 浏览器不可用时降级
             logger.warn(f"{MaoyanRankProvider.provider_name}：获取 Cookie 失败，降级无 Cookie 请求：{err}")
             return {}
+        finally:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception as err:  # noqa: BLE001 - 清理失败不覆盖已经取得的 Cookie
+                    logger.warning(f"{MaoyanRankProvider.provider_name}：关闭浏览器上下文失败：{err}")
 
     @staticmethod
     def _too_stale(max_date, max_age_days: int = 30) -> bool:

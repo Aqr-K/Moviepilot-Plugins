@@ -1,5 +1,5 @@
 <template>
-  <section class="asa-page">
+  <section ref="pageRef" class="asa-page" :class="{ 'asa-page--progressive': sidebarDesktop }" :style="sidebarDesktop ? { blockSize: sidebarHeight } : undefined">
     <!-- 面包屑风格头部（与订阅配置一致） -->
     <header class="asa-pg-head">
       <div class="asa-pg-head__brand">
@@ -24,99 +24,108 @@
     <div class="asa-pg-scroll" ref="containerRef">
       <!-- 订阅历史 -->
       <div v-if="view === 'history'" class="asa-pg-body">
-        <v-alert v-if="error" class="mb-3" density="compact" type="warning" variant="tonal">{{ error }}</v-alert>
+        <div class="asa-pg-controls">
+          <v-alert v-if="error" class="mb-3" density="compact" type="warning" variant="tonal">{{ error }}</v-alert>
 
-        <!-- 统计块（点击可按状态筛选） -->
-        <div class="asa-stats">
-          <button
-            v-for="s in statCards"
-            :key="s.key"
-            type="button"
-            :class="['asa-stat', `asa-stat--${s.color}`, { 'asa-stat--active': filters.statuses.includes(s.key) }]"
-            @click="toggleStatus(s.key)"
-          >
-            <span class="asa-stat__num">{{ s.count }}</span>
-            <span class="asa-stat__label">{{ s.label }}</span>
-          </button>
-        </div>
+          <!-- 统计块（点击可按状态筛选） -->
+          <div class="asa-stats">
+            <button
+              v-for="s in statCards"
+              :key="s.key"
+              type="button"
+              :class="['asa-stat', `asa-stat--${s.color}`, { 'asa-stat--active': filters.statuses.includes(s.key) }]"
+              @click="toggleStatus(s.key)"
+            >
+              <span class="asa-stat__num">{{ s.count }}</span>
+              <span class="asa-stat__label">{{ s.label }}</span>
+            </button>
+          </div>
 
-        <!-- 搜索 + 筛选：桌面与移动端统一为「筛选」弹窗触发按钮 + 多选开关 -->
-        <div class="asa-filters">
-          <v-btn
-            class="asa-filters__trigger"
-            :color="hasFilter ? 'primary' : undefined"
-            prepend-icon="mdi-filter-variant"
-            size="small"
-            :variant="hasFilter ? 'tonal' : 'outlined'"
-            @click="openFilterDialog"
-          >
-            {{ t('filter') }}
-            <span v-if="activeFilterCount" class="asa-filters__badge">{{ activeFilterCount }}</span>
-          </v-btn>
-          <v-spacer />
-          <v-btn
-            v-if="hasFilter" class="asa-filters__clear" size="small" variant="text" @click="clearFilters"
-          >
-            <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
-          </v-btn>
-          <v-btn
-            :color="selectMode ? 'primary' : undefined" :variant="selectMode ? 'flat' : 'tonal'" size="small"
-            prepend-icon="mdi-checkbox-multiple-marked-outline" @click="toggleSelectMode"
-          >{{ selectMode ? t('exitSelect') : t('select') }}</v-btn>
-        </div>
+          <!-- 搜索 + 筛选：桌面与移动端统一为「筛选」弹窗触发按钮 + 多选开关 -->
+          <div class="asa-filters">
+            <v-btn
+              class="asa-filters__trigger"
+              :color="hasFilter ? 'primary' : undefined"
+              prepend-icon="mdi-filter-variant"
+              size="small"
+              :variant="hasFilter ? 'tonal' : 'outlined'"
+              @click="openFilterDialog"
+            >
+              {{ t('filter') }}
+              <span v-if="activeFilterCount" class="asa-filters__badge">{{ activeFilterCount }}</span>
+            </v-btn>
+            <v-spacer />
+            <v-btn
+              v-if="hasFilter" class="asa-filters__clear" size="small" variant="text" @click="clearFilters"
+            >
+              <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
+            </v-btn>
+            <v-btn
+              :color="selectMode ? 'primary' : undefined" :variant="selectMode ? 'flat' : 'tonal'" size="small"
+              prepend-icon="mdi-checkbox-multiple-marked-outline" @click="toggleSelectMode"
+            >{{ selectMode ? t('exitSelect') : t('select') }}</v-btn>
+          </div>
 
-        <!-- 批量操作条：选本页 / 选全部 / 清除 -->
-        <div v-if="selectMode" class="asa-batch">
-          <span class="asa-batch__count">{{ t('selectedN', { n: selected.size }) }}</span>
-          <v-btn size="small" variant="text" prepend-icon="mdi-checkbox-marked-outline" @click="selectCurrentPage">{{ t('selPage') }}</v-btn>
-          <v-btn size="small" variant="text" prepend-icon="mdi-select-all" :loading="selectingAll" @click="selectAll">{{ t('selAll', { n: total }) }}</v-btn>
-          <v-btn v-if="selected.size" size="small" variant="text" @click="selected.clear()">{{ t('selClear') }}</v-btn>
-          <v-spacer />
-          <v-btn :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-trash-can-outline" @click="askDelete([...selected])">{{ t('batchDelete') }}</v-btn>
-        </div>
+          <!-- 批量操作条：选本页 / 选全部 / 清除 -->
+          <div v-if="selectMode" class="asa-batch">
+            <span class="asa-batch__count">{{ t('selectedN', { n: selected.size }) }}</span>
+            <v-btn size="small" variant="text" prepend-icon="mdi-checkbox-marked-outline" @click="selectCurrentPage">{{ t(sidebarDesktop ? 'selLoaded' : 'selPage') }}</v-btn>
+            <v-btn size="small" variant="text" prepend-icon="mdi-select-all" :loading="selectingAll" @click="selectAll">{{ t('selAll', { n: total }) }}</v-btn>
+            <v-btn v-if="selected.size" size="small" variant="text" @click="selected.clear()">{{ t('selClear') }}</v-btn>
+            <v-spacer />
+            <v-btn :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-trash-can-outline" @click="askDelete([...selected])">{{ t('batchDelete') }}</v-btn>
+          </div>
 
-        <!-- 加载骨架：数量跟随每页条数（列×3 或移动端行数），与数据网格等高，避免切换/翻页闪烁 -->
-        <div v-if="loading" class="asa-grid">
-          <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
         </div>
+        <ProgressiveList
+          ref="historyListRef" :progressive="sidebarDesktop" :count="items.length"
+          :loading="loading || historyRefreshing || loadingMore" :has-more="historyHasMore" :error="historyMoreError"
+          @load="loadMoreHistory"
+        >
+          <!-- 加载骨架：数量跟随每页条数（列×3 或移动端行数），与数据网格等高，避免切换/翻页闪烁 -->
+          <div v-if="loading" class="asa-grid">
+            <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
+          </div>
 
-        <!-- 空态 -->
-        <div v-else-if="!items.length" class="asa-empty">
-          <div class="asa-empty__ico"><v-icon :icon="hasFilter ? 'mdi-filter-off-outline' : 'mdi-playlist-star'" size="30" /></div>
-          <p class="asa-empty__text">{{ hasFilter ? t('emptyFiltered') : t('emptyNone') }}</p>
-          <p class="asa-empty__hint">{{ hasFilter ? t('emptyFilteredHint') : t('emptyNoneHint') }}</p>
-          <v-btn v-if="hasFilter" size="small" variant="tonal" @click="clearFilters">{{ t('clearFilters') }}</v-btn>
-        </div>
+          <!-- 空态 -->
+          <div v-else-if="!items.length" class="asa-empty">
+            <div class="asa-empty__ico"><v-icon :icon="hasFilter ? 'mdi-filter-off-outline' : 'mdi-playlist-star'" size="30" /></div>
+            <p class="asa-empty__text">{{ hasFilter ? t('emptyFiltered') : t('emptyNone') }}</p>
+            <p class="asa-empty__hint">{{ hasFilter ? t('emptyFilteredHint') : t('emptyNoneHint') }}</p>
+            <v-btn v-if="hasFilter" size="small" variant="tonal" @click="clearFilters">{{ t('clearFilters') }}</v-btn>
+          </div>
 
-        <!-- 横版卡片墙 -->
-        <div v-else class="asa-grid">
-          <MediaCard
-            v-for="item in items"
-            :key="item.unique"
-            :poster="item.poster || ''"
-            :name="mediaName(item)"
-            :lines="cardLines(item)"
-            :status="statusBadge(item)"
-            :selectable="selectMode"
-            :selected="selected.has(item.unique)"
-            :more-label="t('more')"
-            @toggle="toggleOne(item.unique)"
-          >
-            <template #actions>
-              <v-list-item prepend-icon="mdi-cancel" :title="t('blacklistAdd')" @click="openBlacklist(item)" />
-              <v-list-item
-                v-if="['error', 'unrecognized'].includes(item.status)"
-                prepend-icon="mdi-refresh" :title="t('reRecognize')"
-                :disabled="recognizing.has(item.unique)"
-                @click="reRecognize(item)"
-              />
-              <v-list-item
-                base-color="error" prepend-icon="mdi-trash-can-outline" :title="t('delete')"
-                @click="askDelete([item.unique])"
-              />
-            </template>
-          </MediaCard>
-        </div>
+          <!-- 横版卡片墙 -->
+          <div v-else class="asa-grid">
+            <MediaCard
+              v-for="item in items"
+              :key="item.unique"
+              :poster="item.poster || ''"
+              :name="mediaName(item)"
+              :lines="cardLines(item)"
+              :status="statusBadge(item)"
+              :selectable="selectMode"
+              :selected="selected.has(item.unique)"
+              :more-label="t('more')"
+              @toggle="toggleOne(item.unique)"
+            >
+              <template #actions>
+                <v-list-item prepend-icon="mdi-file-document-edit-outline" :title="t('supplement')" @click="openSupplement(item)" />
+                <v-list-item prepend-icon="mdi-cancel" :title="t('blacklistAdd')" @click="openBlacklist(item)" />
+                <v-list-item
+                  v-if="['error', 'unrecognized'].includes(item.status)"
+                  prepend-icon="mdi-refresh" :title="t('reRecognize')"
+                  :disabled="recognizing.has(item.unique)"
+                  @click="reRecognize(item)"
+                />
+                <v-list-item
+                  base-color="error" prepend-icon="mdi-trash-can-outline" :title="t('delete')"
+                  @click="askDelete([item.unique])"
+                />
+              </template>
+            </MediaCard>
+          </div>
+        </ProgressiveList>
       </div>
 
       <!-- 订阅管理 -->
@@ -125,6 +134,7 @@
         ref="blacklistRef"
         class="asa-pg-body"
         :api="api"
+        :progressive="sidebarDesktop"
         :page-size="pageSize"
         v-model:page="blacklistPage"
         @update:page-count="v => blacklistCount = v"
@@ -134,6 +144,7 @@
         v-else
         class="asa-pg-body"
         :api="api"
+        :progressive="sidebarDesktop"
         :page-size="pageSize"
         v-model:page="managePage"
         @update:page-count="v => manageCount = v"
@@ -143,9 +154,7 @@
 
     <!-- 固定页脚：桌面「页码 + 跳转」左对齐；移动端页码占满可用宽度（自动截断、始终含首尾页），
          「每页行数 + 指定页跳转」收入弹窗，避免窄屏页码被跳转框覆盖。 -->
-    <footer v-if="activePageCount > 1 || isSingleCol" class="asa-pg-foot" :class="{ 'asa-pg-foot--mobile': isSingleCol }">
-      <!-- 移动端：左侧与右侧「设置按钮」等宽的占位，使中间页码在整条页脚内真正水平居中 -->
-      <div v-if="isSingleCol && activePageCount > 1" class="asa-pg-foot__spacer" aria-hidden="true"></div>
+    <footer v-if="!sidebarDesktop && (activePageCount > 1 || isSingleCol)" class="asa-pg-foot" :class="{ 'asa-pg-foot--mobile': isSingleCol }">
       <!-- 页码（flex 伸缩 + min-width:0 → v-pagination 按可用宽度自动截断） -->
       <div v-if="activePageCount > 1" class="asa-pg-foot__nav">
         <v-pagination
@@ -217,6 +226,7 @@
     </v-dialog>
 
     <BlacklistDialog v-model="blacklistOpen" :api="api" :target="blacklistTarget" @saved="fetchStatus" />
+    <SupplementDialog v-model="supplementOpen" :api="api" :target="supplementTarget" @changed="refreshSupplement" />
 
     <!-- 二次确认（删除历史） -->
     <v-dialog v-model="confirm.open" max-width="380">
@@ -252,13 +262,15 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import MediaCard from './MediaCard.vue'
 import SubscribeView from './SubscribeView.vue'
 import BlacklistView from './BlacklistView.vue'
 import BlacklistDialog from './BlacklistDialog.vue'
 import PluginTabs from './PluginTabs.vue'
 import FilterPanel from './FilterPanel.vue'
+import ProgressiveList from './ProgressiveList.vue'
+import SupplementDialog from './SupplementDialog.vue'
 import '../styles/mediaViews.css'
 import { useMediaGrid } from '../composables/useMediaGrid'
 
@@ -266,6 +278,7 @@ const props = defineProps({
   api: { type: Object, default: () => ({}) },
   show_switch: { type: Boolean, default: true },
   initialView: { type: String, default: '' },
+  sidebar: Boolean,
 })
 const emit = defineEmits(['switch', 'close', 'action'])
 
@@ -287,14 +300,14 @@ const STAT_ORDER = ['subscribed', 'media_exists', 'subscription_exists', 'blackl
 
 const MSG = {
   'zh-CN': {
-    blacklist: '黑名单', blacklistAdd: '加入黑名单', 'st.blacklisted': '已忽略', plugin: '插件', appTitle: '自动订阅助手', title: '订阅历史', manageTitle: '订阅管理', config: '订阅配置',
+    supplement: '补充编辑', blacklist: '黑名单', blacklistAdd: '加入黑名单', 'st.blacklisted': '已忽略', plugin: '插件', appTitle: '自动订阅助手', title: '订阅历史', manageTitle: '订阅管理', config: '订阅配置',
     records: '共 {n} 条记录', refresh: '刷新', close: '关闭', searchPh: '搜索名称…',
     filterSource: '来源', filterStatus: '状态', filterType: '类型', clearFilters: '清除筛选',
     filter: '筛选', filterTitle: '筛选与搜索', filterYear: '发行年份', yearFrom: '起始年', yearTo: '结束年',
     filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
     'mt.movie': '电影', 'mt.tv': '剧集',
     select: '多选', exitSelect: '退出多选', selectedN: '已选 {n} 项', batchDelete: '批量删除',
-    selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
+    selLoaded: '选择已加载', selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
     emptyFiltered: '没有符合筛选条件的记录', emptyFilteredHint: '试试调整搜索或筛选条件',
     emptyNone: '暂无订阅历史记录', emptyNoneHint: '启用来源并运行后，这里会记录每次订阅结果',
     confirmTitle: '删除确认', confirmDeleteN: '确认删除选中的 {n} 条记录？', cancel: '取消', delete: '删除',
@@ -306,14 +319,14 @@ const MSG = {
     'st.filtered': '被过滤', 'st.unrecognized': '未识别', 'st.already_handled': '已处理', 'st.error': '异常',
   },
   'zh-TW': {
-    blacklist: '黑名單', blacklistAdd: '加入黑名單', 'st.blacklisted': '已忽略', plugin: '外掛', appTitle: '自動訂閱助手', title: '訂閱歷史', manageTitle: '訂閱管理', config: '訂閱設定',
+    supplement: '補充編輯', blacklist: '黑名單', blacklistAdd: '加入黑名單', 'st.blacklisted': '已忽略', plugin: '外掛', appTitle: '自動訂閱助手', title: '訂閱歷史', manageTitle: '訂閱管理', config: '訂閱設定',
     records: '共 {n} 筆記錄', refresh: '重新整理', close: '關閉', searchPh: '搜尋名稱…',
     filterSource: '來源', filterStatus: '狀態', filterType: '類型', clearFilters: '清除篩選',
     filter: '篩選', filterTitle: '篩選與搜尋', filterYear: '發行年份', yearFrom: '起始年', yearTo: '結束年',
     filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
     'mt.movie': '電影', 'mt.tv': '劇集',
     select: '多選', exitSelect: '退出多選', selectedN: '已選 {n} 項', batchDelete: '批量刪除',
-    selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
+    selLoaded: '選擇已載入', selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
     emptyFiltered: '沒有符合篩選條件的記錄', emptyFilteredHint: '試試調整搜尋或篩選條件',
     emptyNone: '暫無訂閱歷史記錄', emptyNoneHint: '啟用來源並執行後，這裡會記錄每次訂閱結果',
     confirmTitle: '刪除確認', confirmDeleteN: '確認刪除選中的 {n} 筆記錄？', cancel: '取消', delete: '刪除',
@@ -325,14 +338,14 @@ const MSG = {
     'st.filtered': '被過濾', 'st.unrecognized': '未識別', 'st.already_handled': '已處理', 'st.error': '異常',
   },
   'en-US': {
-    blacklist: 'Blacklist', blacklistAdd: 'Add to blacklist', 'st.blacklisted': 'Ignored', plugin: 'Plugin', appTitle: 'Auto Subscribe', title: 'History', manageTitle: 'Manage', config: 'Settings',
+    supplement: 'Edit and subscribe', blacklist: 'Blacklist', blacklistAdd: 'Add to blacklist', 'st.blacklisted': 'Ignored', plugin: 'Plugin', appTitle: 'Auto Subscribe', title: 'History', manageTitle: 'Manage', config: 'Settings',
     records: '{n} records', refresh: 'Refresh', close: 'Close', searchPh: 'Search name…',
     filterSource: 'Source', filterStatus: 'Status', filterType: 'Type', clearFilters: 'Clear filters',
     filter: 'Filters', filterTitle: 'Filter & search', filterYear: 'Release year', yearFrom: 'From', yearTo: 'To',
     filterAll: 'All', searchLabel: 'Search', applyFilter: 'Apply', resetFilter: 'Reset',
     'mt.movie': 'Movies', 'mt.tv': 'TV series',
     select: 'Select', exitSelect: 'Done', selectedN: '{n} selected', batchDelete: 'Delete',
-    selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
+    selLoaded: 'Loaded items', selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
     emptyFiltered: 'No records match the filters', emptyFilteredHint: 'Try adjusting the search or filters',
     emptyNone: 'No subscription history yet', emptyNoneHint: 'Once sources are enabled and run, results appear here',
     confirmTitle: 'Confirm delete', confirmDeleteN: 'Delete {n} selected record(s)?', cancel: 'Cancel', delete: 'Delete',
@@ -364,6 +377,10 @@ function statusLabel(status) { return STATUS_META[status] ? t('st.' + status) : 
 const blacklistRef = ref(null)
 const subscribeRef = ref(null)
 const blacklistOpen = ref(false)
+const supplementOpen = ref(false)
+const supplementTarget = ref({})
+function openSupplement(item) { supplementTarget.value = item; supplementOpen.value = true }
+async function refreshSupplement() { await Promise.all([fetchStatus(), fetchHistory(true)]) }
 const blacklistTarget = ref({})
 function openBlacklist(item) { blacklistTarget.value = { ...item, kind: 'history' }; blacklistOpen.value = true }
 const view = ref(props.initialView || readInitialView())
@@ -415,10 +432,27 @@ function readRows() {
 }
 const mobileRows = ref(readRows())
 
+const pageRef = ref(null)
+const historyListRef = ref(null)
+const viewportWidth = ref(typeof window === 'undefined' ? 0 : window.innerWidth)
+const sidebarHeight = ref('calc(100dvh - 80px)')
+const sidebarDesktop = computed(() => props.sidebar && viewportWidth.value >= 960)
+function updateSidebarLayout() {
+  if (typeof window === 'undefined') return
+  viewportWidth.value = window.innerWidth
+  if (pageRef.value) sidebarHeight.value = `${Math.max(240, window.innerHeight - pageRef.value.getBoundingClientRect().top - 8)}px`
+}
+
 const { containerRef, cols, measure } = useMediaGrid()
 // 单列（移动端）按用户所选行数分页；多列（桌面）锁 3 行、列数自适应。
 const isSingleCol = computed(() => cols.value <= 1)
-const pageSize = computed(() => (isSingleCol.value ? mobileRows.value : Math.max(cols.value * 3, 1)))
+const pageSize = computed(() => sidebarDesktop.value ? 24 : (isSingleCol.value ? mobileRows.value : Math.max(cols.value * 3, 1)))
+const loadingMore = ref(false)
+const historyRefreshing = ref(false)
+const historyMoreError = ref('')
+const historyLoadedPage = ref(0)
+const historyExhausted = ref(false)
+const historyHasMore = computed(() => !historyExhausted.value && items.value.length < total.value)
 
 const showSwitch = computed(() => props.show_switch)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
@@ -512,20 +546,37 @@ function historyQuery() {
 }
 
 let fetchSeq = 0
-async function fetchHistory(silent = false) {
+async function fetchHistory(silent = false, append = false) {
+  if (append && (!sidebarDesktop.value || loading.value || historyRefreshing.value || loadingMore.value || !historyHasMore.value)) return
   // 请求时序守卫：列数测量稳定/翻页会触发多次取数（不同 count/page），
   // 仅采纳最新一次的响应，丢弃过期响应（否则小 count 的旧响应可能覆盖大 count → 只剩 2 行）。
   const seq = ++fetchSeq
-  if (!silent) loading.value = true
-  error.value = ''
+  const progressive = sidebarDesktop.value
+  const requestPage = progressive ? (append ? historyLoadedPage.value + 1 : 1) : page.value
+  if (append) loadingMore.value = true
+  else {
+    historyRefreshing.value = true
+    loadingMore.value = false
+    if (!silent) loading.value = true
+    error.value = ''
+  }
+  historyMoreError.value = ''
   try {
     if (!props.api || typeof props.api.get !== 'function') throw new Error(t('apiUnavailable'))
-    const query = qs({ ...historyQuery(), page: page.value, count: pageSize.value })
+    const query = qs({ ...historyQuery(), page: requestPage, count: pageSize.value })
     const res = await props.api.get(`${PLUGIN}/history?${query}`)
     if (seq !== fetchSeq) return
-    items.value = normalizeList(res)
+    if (res?.code != null && res.code !== 0) throw new Error(res.message || t('unknown'))
+    const records = normalizeList(res)
+    const previousCount = items.value.length
+    items.value = append
+      ? [...new Map([...items.value, ...records].map(item => [item.unique, item])).values()]
+      : records
     total.value = Number(res?.total) || items.value.length
-    if (page.value > pageCount.value) {
+    historyLoadedPage.value = requestPage
+    historyExhausted.value = !records.length || (append && items.value.length === previousCount)
+    if (progressive && !append) historyListRef.value?.scrollToTop()
+    if (!progressive && page.value > pageCount.value) {
       // 越界页（例如把最后一页删空了）服务端返回空数组。只把页码改回去不够：
       // 列表仍是那份空结果，界面会显示成「有 N 页却一条都没有」。必须按纠正后的
       // 页码重新取一次。
@@ -534,13 +585,17 @@ async function fetchHistory(silent = false) {
     }
   } catch (e) {
     if (seq !== fetchSeq) return
-    error.value = t('historyError') + (e?.message || e)
-    items.value = []
-    total.value = 0
+    if (append) historyMoreError.value = t('historyError') + (e?.message || e)
+    else {
+      error.value = t('historyError') + (e?.message || e)
+      items.value = []
+      total.value = 0
+    }
   } finally {
-    if (seq === fetchSeq) { loading.value = false; emit('action') }
+    if (seq === fetchSeq) { loading.value = false; loadingMore.value = false; historyRefreshing.value = false; emit('action') }
   }
 }
+function loadMoreHistory() { return fetchHistory(true, true) }
 
 async function fetchStatus() {
   try {
@@ -677,19 +732,34 @@ async function reRecognize(item) {
 }
 
 // 每页条数变化（列数变化或移动端改行数）→ 历史静默重取；订阅管理由 pageSize prop 响应式重切。
-watch(pageSize, () => { if (view.value === 'history') fetchHistory(true) })
+watch([pageSize, sidebarDesktop], () => { if (view.value === 'history') fetchHistory(true) })
 // 订阅管理页数变化时收敛当前页；切换视图后清空选择并重新测量网格列数。
 watch(blacklistCount, c => { if (blacklistPage.value > c) blacklistPage.value = c })
 watch(manageCount, c => { if (managePage.value > c) managePage.value = c })
 watch(view, () => {
+  fetchSeq++
+  loading.value = false
+  loadingMore.value = false
+  historyRefreshing.value = false
   selectionSeq++
   selectingAll.value = false
   selectMode.value = false
   selected.clear()
+  if (view.value === 'history') fetchHistory()
   nextTick(() => measure())
 })
 
-onMounted(() => { fetchStatus(); fetchHistory() })
+onMounted(() => {
+  updateSidebarLayout()
+  if (typeof window !== 'undefined') window.addEventListener('resize', updateSidebarLayout, { passive: true })
+  fetchStatus()
+  if (view.value === 'history') fetchHistory()
+})
+onBeforeUnmount(() => {
+  fetchSeq++
+  selectionSeq++
+  if (typeof window !== 'undefined') window.removeEventListener('resize', updateSidebarLayout)
+})
 </script>
 
 <style scoped>
@@ -700,6 +770,16 @@ onMounted(() => { fetchStatus(); fetchHistory() })
   --asa-line: rgba(var(--v-theme-on-surface), 0.08);
 }
 .asa-page, .asa-page * { box-sizing: border-box; }
+
+/* 桌面侧栏只滚动卡片列表，页头、标签、统计与工具区保留在可视区域。 */
+.asa-page--progressive { display: flex; flex-direction: column; min-block-size: 0; overflow: hidden; }
+.asa-page--progressive > .asa-pg-head,
+.asa-page--progressive > :deep(.asa-tabs) { flex: 0 0 auto; }
+.asa-page--progressive .asa-pg-scroll { display: flex; flex: 1 1 auto; min-block-size: 0; overflow: hidden; }
+.asa-page--progressive :deep(.asa-pg-body) {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; min-inline-size: 0; padding-block-end: 0;
+}
+.asa-page--progressive :deep(.asa-pg-controls) { flex: 0 0 auto; }
 
 /* 面包屑风格头部（与 Config 一致） */
 .asa-pg-head {
@@ -754,20 +834,39 @@ onMounted(() => { fetchStatus(); fetchHistory() })
   background: var(--app-grouped-list-background, rgb(var(--v-theme-surface)));
 }
 .asa-pg-foot__nav { display: flex; align-items: center; gap: 10px; min-inline-size: 0; }
-.asa-pg-foot__nav :deep(.v-pagination__list) { margin: 0; }
+.asa-pg-foot__nav :deep(.v-pagination__list) { display: flex; margin: 0; }
+/* 图标可能高于紧凑按钮，按点击区域居中，避免网格内容从顶部溢出。 */
+.asa-pg-foot__nav :deep(.v-pagination__prev .v-btn__content),
+.asa-pg-foot__nav :deep(.v-pagination__next .v-btn__content) {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+}
 .asa-pg-foot__jump { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .asa-pg-foot__jf { inline-size: 72px; }
+.asa-pg-foot__jf :deep(.v-field) {
+  --v-input-control-height: 30px;
+  --v-field-input-padding-top: 0px;
+  --v-field-input-padding-bottom: 0px;
+}
 .asa-pg-foot__more { flex: 0 0 auto; }
+
+/* 宿主可配置大圆角，描边起始段不能小于圆角半径，否则左侧弧度会被压扁。 */
+.asa-pg-foot__jf :deep(.v-field__outline__start),
+.asa-foot-dlg__field :deep(.v-field__outline__start) {
+  flex-basis: max(12px, var(--app-field-radius, 4px));
+}
 
 /* 移动端页脚：页码占满可用宽度（自动截断中段、始终保留首尾页），设置按钮固定在右侧；
    每页行数与跳转已收入弹窗，页码不再被跳转框挤占/覆盖。 */
 .asa-pg-foot--mobile { flex-wrap: nowrap; gap: 8px; padding-inline: 12px; }
-/* 页码容器铺满页脚中段（两侧各留一个等宽元素：左占位、右设置按钮 → 整体在页脚内水平居中） */
-.asa-pg-foot--mobile .asa-pg-foot__spacer { flex: 0 0 40px; }
+/* 直接使用整行空间，分页均匀展开，设置按钮保持宿主原有尺寸。 */
 .asa-pg-foot--mobile .asa-pg-foot__nav { flex: 1 1 auto; min-inline-size: 0; }
-/* 页码作为一个容器铺满中段，其中「<、数字、>」互相水平居中、垂直对齐一行 */
+/* 页码与前后翻页按钮随可用宽度分布，所有按钮保持同一水平中心线。 */
 .asa-pg-foot--mobile .asa-pg-foot__nav :deep(.v-pagination) { inline-size: 100%; }
-.asa-pg-foot--mobile .asa-pg-foot__nav :deep(.v-pagination__list) { inline-size: 100%; flex-wrap: nowrap; align-items: center; justify-content: center; gap: 2px; }
+.asa-pg-foot--mobile .asa-pg-foot__nav :deep(.v-pagination__list) { inline-size: 100%; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 2px; padding-inline: 8px; }
+/* li 使用 flex 消除内联按钮的基线留白，与设置按钮按同一中心线对齐。 */
+.asa-pg-foot--mobile .asa-pg-foot__nav :deep(.v-pagination__list > li) {
+  display: flex; align-items: center; justify-content: center; margin: 0;
+}
 
 /* 页脚设置弹窗：每页行数 + 跳转（输入框与「跳转」按钮等高对齐） */
 .asa-foot-dlg__title { display: flex; align-items: center; gap: 8px; font-size: 1rem; font-weight: 700; }

@@ -270,10 +270,16 @@ _HINTS: Dict[Any, Dict[str, str]] = {
 }
 
 
-def localize_provider_name(provider_id: str, fallback: str, lang: Any) -> str:
-    """按 provider_id 稳定键返回来源显示名（与硬编码 provider_name 解耦）。
+def localize_provider_name(provider_id: Optional[str], fallback: str, lang: Any) -> str:
+    """
+    按 provider_id 稳定键返回来源显示名（与硬编码 provider_name 解耦）。
 
-    未登记的 provider_id 回退传入的 ``fallback``（即后端 provider_name）。
+    缺失或未登记的 provider_id 回退传入的 ``fallback``（即后端 provider_name）。
+
+    :param provider_id: 来源标识；允许为 None 或空字符串
+    :param fallback: 未找到来源译名时使用的显示名
+    :param lang: 宿主语言，按受支持的语言归一化
+    :return: 本地化来源名称或回退显示名
     """
     names = _PROVIDER_NAMES.get(provider_id or "")
     if not names:

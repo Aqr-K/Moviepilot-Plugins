@@ -561,7 +561,14 @@ class NetflixRankProvider(RankProvider):
 
     @staticmethod
     def _format_ts(ts: Optional[float]) -> str:
-        """把 epoch 秒格式化为可读时间（仅用于日志），非法值原样返回。"""
+        """
+        把 epoch 秒格式化为日志时间，空值或非法值返回其字符串。
+
+        :param ts: epoch 秒；允许为 None
+        :return: 可读时间或原值的字符串
+        """
+        if ts is None:
+            return str(ts)
         try:
             return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
         except (ValueError, TypeError, OSError, OverflowError):
@@ -570,19 +577,24 @@ class NetflixRankProvider(RankProvider):
     def _load_persistent(
         self, context: Optional[ProviderContext], key: str, now: float
     ) -> Optional[tuple]:
-        """从持久化插件 KV（L2）读取未过期缓存并反序列化为条目列表。
+        """
+        从持久化插件 KV（L2）读取未过期缓存并反序列化为条目列表。
 
-        ``context`` 有 ``get_data`` 时读 ``get_data(_CACHE_DATA_KEY) or {}``，取该 ``key`` 的
+        ``context`` 有 ``get_data`` 时读取字典缓存，取该 ``key`` 的
         entry；若 ``entry and now < entry["valid_until"]`` 则反序列化
         ``[RankMediaItem.from_dict(x) for x in entry["items"]]``，返回
         ``(items, entry["week"], entry["valid_until"])``；否则 None。``context`` 无 KV / 为 None → None。
-        **KV 读或反序列化失败仅告警、返回 None（降级为仅 L1），不影响抓取**（防污染）。
+        **KV 格式错误、读取或反序列化失败仅告警、返回 None（降级为仅 L1），不影响抓取**（防污染）。
         """
         get_data = getattr(context, "get_data", None) if context is not None else None
         if not callable(get_data):
             return None
         try:
-            store = get_data(_CACHE_DATA_KEY) or {}
+            store = get_data(_CACHE_DATA_KEY)
+            if store is None:
+                return None
+            if not isinstance(store, dict):
+                raise ValueError("持久化缓存不是字典")
             entry = store.get(key)
             if not entry or now >= entry.get("valid_until", 0):
                 return None
@@ -601,19 +613,24 @@ class NetflixRankProvider(RankProvider):
         valid_until: float,
         now: float,
     ) -> None:
-        """把本次抓取序列化写入持久化插件 KV（L2）；剔除已过期条目防无限增长。
+        """
+        把本次抓取序列化写入持久化插件 KV（L2）；剔除已过期条目防无限增长。
 
         ``context`` 有 ``save_data`` 时读 store、剔除 ``valid_until < now`` 的过期条目，写入
         ``store[key] = {"items": [it.to_dict()...], "week", "valid_until", "fetched_ts": now}`` 后
         ``save_data(_CACHE_DATA_KEY, store)``。**KV 读/写失败仅告警、不影响抓取产出**（防污染）；
-        ``context`` 无 KV / 为 None 时直接返回（仅 L1）。
+        ``context`` 无 KV / 为 None 时直接返回（仅 L1）；已有缓存不是字典时告警并跳过写入。
         """
         save_data = getattr(context, "save_data", None) if context is not None else None
         if not callable(save_data):
             return
         get_data = getattr(context, "get_data", None) if context is not None else None
         try:
-            store = (get_data(_CACHE_DATA_KEY) or {}) if callable(get_data) else {}
+            store = get_data(_CACHE_DATA_KEY) if callable(get_data) else None
+            if store is None:
+                store = {}
+            if not isinstance(store, dict):
+                raise ValueError("持久化缓存不是字典")
             # 剔除已过期条目，防 store 无限增长。
             store = {
                 k: v for k, v in store.items()
@@ -984,8 +1001,13 @@ class NetflixRankProvider(RankProvider):
         return _JS_UNESCAPE.sub(cls._js_unescape_sub, raw)
 
     @staticmethod
-    def _js_unescape_sub(match: "re.Match") -> str:
-        """``_JS_UNESCAPE`` 的替换回调：处理 ``\\uXXXX`` / ``\\xXX`` / 简单转义 / 其余原样去斜杠。"""
+    def _js_unescape_sub(match: "re.Match[str]") -> str:
+        """
+        处理 JS 字符串中的十六进制及简单转义，其余原样去斜杠。
+
+        :param match: ``_JS_UNESCAPE`` 产生的字符串匹配
+        :return: 解码后的字符串
+        """
         seq = match.group(1)
         head = seq[0]
         if head in ("u", "x"):
@@ -1100,12 +1122,14 @@ class NetflixRankProvider(RankProvider):
 
     @staticmethod
     def _should_stop(context: Optional[ProviderContext]) -> bool:
-        """是否收到退出信号（``context.event`` 被 set）。"""
-        return (
-            context is not None
-            and getattr(context, "event", None) is not None
-            and context.event.is_set()
-        )
+        """
+        检查运行上下文是否收到退出信号。
+
+        :param context: 运行上下文；为空或无退出事件时继续运行
+        :return: 退出事件已设置时返回 True
+        """
+        event = getattr(context, "event", None) if context is not None else None
+        return event is not None and event.is_set()
 
     @staticmethod
     def _to_int(value, default: int) -> int:

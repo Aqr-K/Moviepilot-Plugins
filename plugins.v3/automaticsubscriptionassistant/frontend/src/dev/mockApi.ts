@@ -418,6 +418,9 @@ export function createMockApi(): MockApi {
     get(url: string): Promise<unknown> {
       const path = url.split('?')[0]
       const lang = parseQuery(url).lang || 'zh-CN'
+      if (path === 'site/rss') return delay({ success: true, data: [{ id: 1, name: '预览站点' }] })
+      if (path === 'download/clients') return delay({ success: true, data: [{ name: '预览下载器' }] })
+      if (path === 'rule/groups') return delay({ success: true, data: { rule_groups: [{ name: '预览规则组' }] } })
       if (path.endsWith('/blacklist')) return delay({ code: 0, list: blacklist.slice(), total: blacklist.length })
       if (path.endsWith('/providers')) {
         return delay({ providers: PROVIDER_SPECS.map(s => localizeSpec(s, lang)) })
@@ -469,6 +472,21 @@ export function createMockApi(): MockApi {
       return delay({})
     },
     post(url: string, body?: Record<string, any>): Promise<unknown> {
+      // 仅开发壳的内存演示，生产识别与防重复行为由后端管线负责。
+      if (url.endsWith('/history/supplement')) {
+        const original = HISTORY.find(row => row.unique === body?.unique)
+        if (!original || !body?.media?.title) return delay({ code: 1, message: '缺少历史或媒体信息' })
+        const media = body.media
+        const season = media.type === '电视剧' ? media.season : null
+        if (SUBSCRIBES.some(row => row.name === media.title && row.type === media.type && row.year === media.year && row.season === season)) {
+          return delay({ code: 0, created: false, status: 'subscription_exists', message: '订阅已存在' })
+        }
+        const id = Math.max(0, ...SUBSCRIBES.map(row => row.id)) + 1
+        const time = new Date().toISOString().replace('T', ' ').slice(0, 19)
+        SUBSCRIBES.unshift({ id, name: media.title, type: media.type, year: media.year || '', season, state: 'R', poster: original.poster, date: time })
+        HISTORY.unshift({ ...original, unique: `manual:${id}`, title: media.title, year: media.year || '', type: media.type, season, status: 'subscribed', reason: null, time })
+        return delay({ code: 0, created: true, status: 'subscribed', subscribe_id: id }, 600)
+      }
       if (url.endsWith('/blacklist/add') || url.endsWith('/subscribes/block')) {
         const blocking = url.endsWith('/subscribes/block')
         const targets = blocking ? SUBSCRIBES.filter(row => (body?.ids || []).includes(row.id))

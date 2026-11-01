@@ -23,7 +23,7 @@ def _normalize_source(media_source):
     if media_source is None:
         return None
     try:
-        from app.schemas.media import normalize_media_source
+        from app.sdk.media import normalize_media_source
 
         return normalize_media_source(media_source)
     except (ImportError, ModuleNotFoundError):
@@ -45,7 +45,7 @@ def _source_prefix(media_source) -> Optional[str]:
     if not source:
         return None
     try:
-        from app.schemas.media import MEDIA_SOURCE_PREFIXES
+        from app.sdk.media import MEDIA_SOURCE_PREFIXES
 
         return MEDIA_SOURCE_PREFIXES.get(source, _source_value(source))
     except (ImportError, ModuleNotFoundError):

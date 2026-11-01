@@ -27,7 +27,7 @@ def _normalize_media_identity(source, media_id) -> Tuple[Any, Optional[str]]:
     if source is None or media_id is None:
         return None, None
     try:
-        from app.schemas.media import normalize_media_source
+        from app.sdk.media import normalize_media_source
 
         normalized_source = normalize_media_source(source)
     except (ImportError, ModuleNotFoundError):
@@ -48,7 +48,7 @@ def _source_value(source) -> Optional[str]:
 def _source_prefix(source) -> str:
     """将宿主来源转换为历史键命名空间，未知扩展来源使用自身值。"""
     try:
-        from app.schemas.media import MEDIA_SOURCE_PREFIXES
+        from app.sdk.media import MEDIA_SOURCE_PREFIXES
 
         return MEDIA_SOURCE_PREFIXES.get(source, _source_value(source))
     except (ImportError, ModuleNotFoundError):

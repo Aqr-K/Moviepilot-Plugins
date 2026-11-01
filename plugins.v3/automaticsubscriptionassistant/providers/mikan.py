@@ -300,12 +300,17 @@ class MikanRankProvider(RankProvider):
         )
 
     def fetch(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
-        """抓取蜜柑季度番剧列表，逐条产出 ``RankMediaItem``。
+        """
+        抓取蜜柑季度番剧列表，逐条产出 ``RankMediaItem``。
 
         ``resolve_bangumi_id`` 为 True 时逐条抓详情补 bgm subject id + 真实放送年 +
         原名/别名，每条之间短暂 sleep 避免压站，并响应 ``context.event`` 退出信号；
         为 False 时不抓详情（年份用配置/当前年、无 bgm id）。单条失败 try/except
         continue，整源抓取失败向上抛出（由 runner 捕获）。
+
+        :param options: 年份、季度、详情补全和代理选项
+        :param context: 运行上下文；无退出事件时正常抓取
+        :yields: 标准化的番剧条目
         """
         options = options or {}
         year = self._resolve_year(options.get("year"))
@@ -322,8 +327,8 @@ class MikanRankProvider(RankProvider):
         config_year = str(year)
         for entry in entries:
             # 响应退出信号。
-            if context is not None and getattr(context, "event", None) is not None \
-                    and context.event.is_set():
+            event = getattr(context, "event", None) if context is not None else None
+            if event is not None and event.is_set():
                 break
             try:
                 detail: dict = {}

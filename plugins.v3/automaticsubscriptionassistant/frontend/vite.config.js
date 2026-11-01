@@ -8,7 +8,9 @@ const vuetifyFilter = {
   postcssPlugin: 'vuetify-filter',
   Root(root) {
     root.walkRules(rule => {
-      if (rule.selector && (rule.selector.includes('.v-') || rule.selector.includes('.mdi-'))) {
+      // 仅剥离以库类名开头的规则，保留 .asa-* 等组件内对 Vuetify 的覆盖。
+      // 此阶段 Vue 尚未添加 scoped 属性，不能用 data-v-* 判断规则归属。
+      if (rule.selector && rule.selectors.every(selector => /^\s*\.(?:v-|mdi-)/.test(selector))) {
         rule.remove()
       }
     })
