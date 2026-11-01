@@ -15,7 +15,7 @@ MoviePilot第三方插件市场：https://github.com/Aqr-k/MoviePilot-Plugins/
 | 7  |  [Server酱消息通知](/docs/ServerChanMsg.md)  | v1.1 | 支持使用Server酱发送消息通知。                           | 无需认证 |
 | 8  |  [插件库更新推送](/docs/PluginMarketsAutoUpdate.md)  | v2.0 | 支持从官方Wiki中获取记录的最新全量插件库、结合添加黑名单，自动化添加插件库。     | 无需认证 |
 | 9  |  [PIP依赖包检测与安装](/docs/PipDetectionInstall.md)  | v1.0 | 解决MoviePilot 的PIP依赖包下载超时失败、不支持代理导致下载缓慢等问题。   | 无需认证 |
-| 10 | [自动订阅助手](plugins.v3/automaticsubscriptionassistant/README.md) | v3.2.0 | 聚合五类榜单来源，按媒体身份与季号自动订阅，支持黑名单、独立侧栏和仪表盘概览。 | 需要认证 |
+| 10 | [自动订阅助手](plugins.v3/automaticsubscriptionassistant/README.md) | v3.3.0 | 聚合榜单自动订阅，支持黑名单、历史补充编辑、侧栏滚动加载及仪表盘。 | 需要认证 |
 
 自动订阅助手后续仅维护、测试和发布 MoviePilot v3 版本；v2 保留历史版本。插件文档说明当前源码行为，未发布的新功能请以对应 Release 为准。
 

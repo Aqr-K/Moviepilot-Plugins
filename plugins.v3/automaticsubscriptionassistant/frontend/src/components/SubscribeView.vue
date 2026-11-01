@@ -1,82 +1,93 @@
 <template>
   <div class="sv">
-    <!-- 工具条：搜索 + 筛选（桌面与移动端统一为弹窗）+ 多选开关 -->
-    <div class="sv-tools">
-      <v-btn
-        class="sv-tools__trigger"
-        :color="hasFilter ? 'primary' : undefined"
-        prepend-icon="mdi-filter-variant"
-        size="small"
-        :variant="hasFilter ? 'tonal' : 'outlined'"
-        @click="openFilterDialog"
-      >
-        {{ t('filter') }}
-        <span v-if="activeFilterCount" class="sv-tools__badge">{{ activeFilterCount }}</span>
-      </v-btn>
-      <v-spacer />
-      <v-btn v-if="hasFilter" size="small" variant="text" @click="clearFilters">
-        <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
-      </v-btn>
-      <v-btn
-        :color="selectMode ? 'primary' : undefined"
-        :variant="selectMode ? 'flat' : 'tonal'"
-        size="small"
-        prepend-icon="mdi-checkbox-multiple-marked-outline"
-        @click="toggleSelectMode"
-      >{{ selectMode ? t('exitSelect') : t('select') }}</v-btn>
+    <div class="asa-pg-controls">
+      <!-- 工具条：搜索 + 筛选（桌面与移动端统一为弹窗）+ 多选开关 -->
+      <div class="sv-tools">
+        <v-btn
+          class="sv-tools__trigger"
+          :color="hasFilter ? 'primary' : undefined"
+          prepend-icon="mdi-filter-variant"
+          size="small"
+          :variant="hasFilter ? 'tonal' : 'outlined'"
+          @click="openFilterDialog"
+        >
+          {{ t('filter') }}
+          <span v-if="activeFilterCount" class="sv-tools__badge">{{ activeFilterCount }}</span>
+        </v-btn>
+        <v-spacer />
+        <v-btn v-if="hasFilter" size="small" variant="text" @click="clearFilters">
+          <v-icon icon="mdi-filter-off-outline" start />{{ t('clearFilters') }}
+        </v-btn>
+        <v-btn
+          :color="selectMode ? 'primary' : undefined"
+          :variant="selectMode ? 'flat' : 'tonal'"
+          size="small"
+          prepend-icon="mdi-checkbox-multiple-marked-outline"
+          @click="toggleSelectMode"
+        >{{ selectMode ? t('exitSelect') : t('select') }}</v-btn>
+      </div>
+
+      <!-- 批量操作条：选本页 / 选全部 / 清除 -->
+      <div v-if="selectMode" class="sv-batch">
+        <span class="sv-batch__count">{{ t('selectedN', { n: selected.size }) }}</span>
+        <v-btn size="small" variant="text" prepend-icon="mdi-checkbox-marked-outline" @click="selectCurrentPage">{{ t(progressive ? 'selLoaded' : 'selPage') }}</v-btn>
+        <v-btn size="small" variant="text" prepend-icon="mdi-select-all" @click="selectAll">{{ t('selAll', { n: filtered.length }) }}</v-btn>
+        <v-btn v-if="selected.size" size="small" variant="text" @click="selected.clear()">{{ t('selClear') }}</v-btn>
+        <v-spacer />
+        <v-btn :disabled="!selected.size" color="success" size="small" variant="tonal" prepend-icon="mdi-play" @click="askBatch('resume')">{{ t('resume') }}</v-btn>
+        <v-btn :disabled="!selected.size" color="warning" size="small" variant="tonal" prepend-icon="mdi-pause" @click="askBatch('pause')">{{ t('pause') }}</v-btn>
+        <v-btn :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-bell-off-outline" @click="askBatch('delete')">{{ t('unsub') }}</v-btn>
+      </div>
+
+      <v-btn v-if="selectMode" :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-cancel" class="mb-3" @click="openBlacklist()">{{ t('block') }}</v-btn>
+
+      <v-alert v-if="error" class="mb-3" density="compact" type="warning" variant="tonal">{{ error }}</v-alert>
     </div>
 
-    <!-- 批量操作条：选本页 / 选全部 / 清除 -->
-    <div v-if="selectMode" class="sv-batch">
-      <span class="sv-batch__count">{{ t('selectedN', { n: selected.size }) }}</span>
-      <v-btn size="small" variant="text" prepend-icon="mdi-checkbox-marked-outline" @click="selectCurrentPage">{{ t('selPage') }}</v-btn>
-      <v-btn size="small" variant="text" prepend-icon="mdi-select-all" @click="selectAll">{{ t('selAll', { n: filtered.length }) }}</v-btn>
-      <v-btn v-if="selected.size" size="small" variant="text" @click="selected.clear()">{{ t('selClear') }}</v-btn>
-      <v-spacer />
-      <v-btn :disabled="!selected.size" color="success" size="small" variant="tonal" prepend-icon="mdi-play" @click="askBatch('resume')">{{ t('resume') }}</v-btn>
-      <v-btn :disabled="!selected.size" color="warning" size="small" variant="tonal" prepend-icon="mdi-pause" @click="askBatch('pause')">{{ t('pause') }}</v-btn>
-      <v-btn :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-bell-off-outline" @click="askBatch('delete')">{{ t('unsub') }}</v-btn>
-    </div>
+    <ProgressiveList ref="listRef" :progressive="progressive" :count="paged.length" :loading="loading"
+      :has-more="paged.length < filtered.length" @load="loadMore">
+      <!-- 加载骨架：数量跟随每页条数，与数据网格等高，避免切换/翻页闪烁 -->
+      <div v-if="loading" class="asa-grid">
+        <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
+      </div>
 
-    <v-btn v-if="selectMode" :disabled="!selected.size" color="error" size="small" variant="tonal" prepend-icon="mdi-cancel" class="mb-3" @click="openBlacklist()">{{ t('block') }}</v-btn>
+      <!-- 空态 -->
+      <div v-else-if="!filtered.length" class="sv-empty">
+        <div class="sv-empty__ico"><v-icon icon="mdi-bell-outline" size="30" /></div>
+        <p class="sv-empty__text">{{ hasFilter ? t('emptyFiltered') : t('emptyNone') }}</p>
+        <p class="sv-empty__hint">{{ t('emptyHint') }}</p>
+      </div>
 
-    <v-alert v-if="error" class="mb-3" density="compact" type="warning" variant="tonal">{{ error }}</v-alert>
+      <!-- 订阅卡片网格 -->
+      <div v-else class="asa-grid">
+        <MediaCard
+          v-for="item in paged"
+          :key="item.id"
+          :poster="item.poster || ''"
+          :name="mediaName(item)"
+          :lines="cardLines(item)"
+          :status="stateBadge(item.state)"
+          :selectable="selectMode"
+          :selected="selected.has(item.id)"
+          :more-label="t('more')"
+          @toggle="toggleOne(item.id)"
+        >
+          <template #actions>
+            <v-list-item prepend-icon="mdi-file-edit-outline" :title="t('edit')" :disabled="nativePending.has(item.id)" @click="runNative('edit', item)" />
+            <v-list-item prepend-icon="mdi-magnify" :title="t('search')" :disabled="nativePending.has(item.id)" @click="runNative('search', item)" />
+            <v-list-item v-if="item.state === 'S'" base-color="success" prepend-icon="mdi-play" :title="t('resume')" :disabled="nativePending.has(item.id)" @click="runNative('resume', item)" />
+            <v-list-item v-else base-color="warning" prepend-icon="mdi-pause" :title="t('pause')" :disabled="nativePending.has(item.id)" @click="runNative('pause', item)" />
+            <v-list-item base-color="warning" prepend-icon="mdi-restore-alert" :title="t('reset')" :disabled="nativePending.has(item.id)" @click="runNative('reset', item)" />
+            <v-list-item prepend-icon="mdi-text-box-search-outline" :title="t('activity')" :disabled="nativePending.has(item.id)" @click="runNative('activity', item)" />
+            <v-list-item prepend-icon="mdi-information-outline" :title="t('detail')" :disabled="nativePending.has(item.id)" @click="runNative('detail', item)" />
+            <v-divider />
+            <v-list-item base-color="error" prepend-icon="mdi-cancel" :title="t('block')" @click="openBlacklist(item)" />
+            <v-list-item base-color="error" prepend-icon="mdi-trash-can-outline" :title="t('unsub')" :disabled="nativePending.has(item.id)" @click="runNative('delete', item)" />
+          </template>
+        </MediaCard>
+      </div>
 
-    <!-- 加载骨架：数量跟随每页条数，与数据网格等高，避免切换/翻页闪烁 -->
-    <div v-if="loading" class="asa-grid">
-      <div v-for="n in pageSize" :key="n" class="asa-skel-card"></div>
-    </div>
-
-    <!-- 空态 -->
-    <div v-else-if="!filtered.length" class="sv-empty">
-      <div class="sv-empty__ico"><v-icon icon="mdi-bell-outline" size="30" /></div>
-      <p class="sv-empty__text">{{ hasFilter ? t('emptyFiltered') : t('emptyNone') }}</p>
-      <p class="sv-empty__hint">{{ t('emptyHint') }}</p>
-    </div>
-
-    <!-- 订阅卡片网格 -->
-    <div v-else class="asa-grid">
-      <MediaCard
-        v-for="item in paged"
-        :key="item.id"
-        :poster="item.poster || ''"
-        :name="mediaName(item)"
-        :lines="cardLines(item)"
-        :status="stateBadge(item.state)"
-        :selectable="selectMode"
-        :selected="selected.has(item.id)"
-        :more-label="t('more')"
-        @toggle="toggleOne(item.id)"
-      >
-        <template #actions>
-          <v-list-item base-color="error" prepend-icon="mdi-cancel" :title="t('block')" @click="openBlacklist(item)" />
-          <v-list-item v-if="item.state === 'S'" base-color="success" prepend-icon="mdi-play" :title="t('resume')" @click="askOne('resume', item)" />
-          <v-list-item v-else base-color="warning" prepend-icon="mdi-pause" :title="t('pause')" @click="askOne('pause', item)" />
-          <v-list-item base-color="error" prepend-icon="mdi-bell-off-outline" :title="t('unsub')" @click="askOne('delete', item)" />
-        </template>
-      </MediaCard>
-    </div>
-
+    </ProgressiveList>
     <BlacklistDialog v-model="blacklistOpen" :api="api" :target="blacklistTarget" @saved="blocked" />
 
     <!-- 二次确认对话框 -->
@@ -113,17 +124,22 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, reactive, ref, watch } from 'vue'
+import { computed, getCurrentInstance, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import MediaCard from './MediaCard.vue'
 import BlacklistDialog from './BlacklistDialog.vue'
 import FilterPanel from './FilterPanel.vue'
+import ProgressiveList from './ProgressiveList.vue'
 
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
   pageSize: { type: Number, default: 12 },
   page: { type: Number, default: 1 },
+  progressive: Boolean,
 })
 const emit = defineEmits(['changed', 'update:page', 'update:pageCount'])
+const subscriptionManager = inject('moviepilot:subscriptionManager', null)
+const nativePending = reactive(new Set())
+let disposed = false
 const PLUGIN = 'plugin/AutomaticSubscriptionAssistant'
 const THEME_COLORS = { primary: 1, secondary: 1, success: 1, info: 1, warning: 1, error: 1 }
 
@@ -136,9 +152,10 @@ const STATE_META = {
 
 const MSG = {
   'zh-CN': {
+    edit: '编辑', search: '搜索', reset: '重置', activity: '订阅活动', detail: '媒体详情', nativeUnavailable: '当前主程序未提供原生订阅管理入口，请升级主程序前端。',
     select: '多选', exitSelect: '退出多选', selectedN: '已选 {n} 项', searchPh: '搜索名称…',
-    selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
-    block: '退订并加入黑名单', resume: '恢复', pause: '暂停', unsub: '退订', cancel: '取消', ok: '确定', unknown: '未知', more: '更多',
+    selLoaded: '选择已加载', selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
+    block: '取消订阅并加入黑名单', resume: '恢复', pause: '暂停', unsub: '取消订阅', cancel: '取消', ok: '确定', unknown: '未知', more: '更多',
     all: '全部', 'st.R': '订阅中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暂停',
     filter: '筛选', filterTitle: '筛选与搜索', filterType: '类型', filterStatus: '状态', filterYear: '发行年份',
     yearFrom: '起始年', yearTo: '结束年', filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
@@ -146,14 +163,15 @@ const MSG = {
     kType: '类型', kGroup: '剧集组', kSource: '来源', kTime: '订阅时间', kYear: '发行年份', source: '自动订阅助手',
     emptyNone: '暂无本插件创建的订阅', emptyFiltered: '没有符合条件的订阅', emptyHint: '启用来源运行后，订阅会出现在这里',
     error: '获取订阅失败：', actionFailed: '操作失败：',
-    confirmDelete: '确认退订选中的 {n} 个订阅？此操作不可撤销。',
+    confirmDelete: '确认取消选中的 {n} 个订阅？此操作不可撤销。',
     confirmPause: '确认暂停选中的 {n} 个订阅？', confirmResume: '确认恢复选中的 {n} 个订阅？',
-    titleDelete: '退订确认', titlePause: '暂停确认', titleResume: '恢复确认',
+    titleDelete: '取消订阅确认', titlePause: '暂停确认', titleResume: '恢复确认',
   },
   'zh-TW': {
+    edit: '編輯', search: '搜尋', reset: '重設', activity: '訂閱活動', detail: '媒體詳情', nativeUnavailable: '目前主程式未提供原生訂閱管理入口，請升級主程式前端。',
     select: '多選', exitSelect: '退出多選', selectedN: '已選 {n} 項', searchPh: '搜尋名稱…',
-    selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
-    block: '退訂並加入黑名單', resume: '恢復', pause: '暫停', unsub: '退訂', cancel: '取消', ok: '確定', unknown: '未知', more: '更多',
+    selLoaded: '選擇已載入', selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
+    block: '取消訂閱並加入黑名單', resume: '恢復', pause: '暫停', unsub: '取消訂閱', cancel: '取消', ok: '確定', unknown: '未知', more: '更多',
     all: '全部', 'st.R': '訂閱中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暫停',
     filter: '篩選', filterTitle: '篩選與搜尋', filterType: '類型', filterStatus: '狀態', filterYear: '發行年份',
     yearFrom: '起始年', yearTo: '結束年', filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
@@ -161,13 +179,14 @@ const MSG = {
     kType: '類型', kGroup: '劇集組', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份', source: '自動訂閱助手',
     emptyNone: '暫無本外掛建立的訂閱', emptyFiltered: '沒有符合條件的訂閱', emptyHint: '啟用來源執行後，訂閱會出現在這裡',
     error: '取得訂閱失敗：', actionFailed: '操作失敗：',
-    confirmDelete: '確認退訂選中的 {n} 個訂閱？此操作不可復原。',
+    confirmDelete: '確認取消選中的 {n} 個訂閱？此操作不可復原。',
     confirmPause: '確認暫停選中的 {n} 個訂閱？', confirmResume: '確認恢復選中的 {n} 個訂閱？',
-    titleDelete: '退訂確認', titlePause: '暫停確認', titleResume: '恢復確認',
+    titleDelete: '取消訂閱確認', titlePause: '暫停確認', titleResume: '恢復確認',
   },
   'en-US': {
+    edit: 'Edit', search: 'Search', reset: 'Reset', activity: 'Subscription activity', detail: 'Media details', nativeUnavailable: 'Update the MoviePilot frontend to use native subscription management.',
     select: 'Select', exitSelect: 'Done', selectedN: '{n} selected', searchPh: 'Search name…',
-    selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
+    selLoaded: 'Loaded items', selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
     block: 'Unsubscribe and blacklist', resume: 'Resume', pause: 'Pause', unsub: 'Unsubscribe', cancel: 'Cancel', ok: 'OK', unknown: 'Unknown', more: 'More',
     all: 'All', 'st.R': 'Active', 'st.N': 'New', 'st.P': 'Pending', 'st.S': 'Paused',
     filter: 'Filters', filterTitle: 'Filter & search', filterType: 'Type', filterStatus: 'Status', filterYear: 'Release year',
@@ -247,9 +266,17 @@ const filtered = computed(() => {
   })
 })
 const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / props.pageSize)))
+const listRef = ref(null)
+const visibleCount = ref(props.pageSize)
 const paged = computed(() => {
+  if (props.progressive) return filtered.value.slice(0, visibleCount.value)
   const start = (props.page - 1) * props.pageSize
   return filtered.value.slice(start, start + props.pageSize)
+})
+function loadMore() { visibleCount.value += props.pageSize }
+watch([filtered, () => props.progressive, () => props.pageSize], () => {
+  visibleCount.value = props.pageSize
+  if (props.progressive) listRef.value?.scrollToTop()
 })
 // 状态多选项：始终列出 4 态，带当前计数。
 const stateItems = computed(() => {
@@ -312,6 +339,33 @@ function selectAll() { filtered.value.forEach(r => selected.add(r.id)) }
 function askBatch(kind) { if (selected.size) { confirm.kind = kind; confirm.ids = [...selected]; confirm.open = true } }
 function askOne(kind, item) { confirm.kind = kind; confirm.ids = [item.id]; confirm.open = true }
 
+// 单卡操作交给宿主原生模块；保存/移除后再刷新，取消弹窗不产生写操作。
+async function runNative(action, item) {
+  if (disposed || nativePending.has(item.id)) return
+  if (typeof subscriptionManager !== 'function') {
+    if (['pause', 'resume', 'delete'].includes(action)) askOne(action, item)
+    else error.value = t('nativeUnavailable')
+    return
+  }
+  nativePending.add(item.id)
+  error.value = ''
+  try {
+    const result = await subscriptionManager({
+      action, subscriptionId: item.id,
+      onChanged: async () => {
+        if (disposed) return
+        await fetchSubs()
+        if (!disposed) emit('changed')
+      },
+    })
+    if (!disposed && !result?.success && !result?.cancelled) error.value = result?.message || t('unknown')
+  } catch (e) {
+    if (!disposed) error.value = t('actionFailed') + (e?.message || e)
+  } finally {
+    nativePending.delete(item.id)
+  }
+}
+
 async function runConfirm() {
   acting.value = true
   error.value = ''
@@ -358,6 +412,7 @@ watch(filters, () => emit('update:page', 1), { deep: true })
 
 defineExpose({ reload: fetchSubs })
 onMounted(fetchSubs)
+onBeforeUnmount(() => { disposed = true })
 </script>
 
 <style scoped>

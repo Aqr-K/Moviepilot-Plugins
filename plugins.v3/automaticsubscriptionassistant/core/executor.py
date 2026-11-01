@@ -40,9 +40,13 @@ class SubscribeExecutor:
     """把标准化条目统一落地为订阅，并沉淀历史。"""
 
     def __init__(self, context: "ProviderContext", global_config: "GlobalConfig",
-                 subscribed_index: Optional[SubscribedIndex] = None):
+                 subscribed_index: Optional[SubscribedIndex] = None, *, manual: bool = False,
+                 subscribe_options: Optional[dict] = None):
+        """装配自动管线或显式手动提交；手动模式仍检查黑名单与宿主已有订阅。"""
         self.ctx = context
         self.gcfg = global_config
+        self.manual = manual
+        self.subscribe_options = dict(subscribe_options or {})
         self.blacklist = BlacklistStore(getattr(context, "get_data", None),
                                         getattr(context, "save_data", None))
         # 已订阅强标识索引（跨渠道 + 与已订阅去重的快速路径）。缺省空索引 → 无快速路径、向后兼容。
@@ -75,7 +79,7 @@ class SubscribeExecutor:
             return self._blocked(item, provider, history)
 
         # 1. 预去重快速路径：强标识命中「已订阅 / 本轮已处理」→ 跳过识别。
-        if self.index.contains(item):
+        if not self.manual and self.index.contains(item):
             canonical = self.index.identity_for(item) or identity
             # 同一命中方式只记一条（身份键合并），避免记录膨胀。
             if not history.is_handled(canonical):
@@ -89,8 +93,8 @@ class SubscribeExecutor:
 
         # 2. 已处理短路（本插件历史中的正向终态）：不识别、不记新历史。
         exact_identity = candidate_is_exact or (item.type_hint is None and bool(item.douban_id or item.bangumi_id))
-        if ((candidate_is_exact and history.is_handled(candidate_key))
-                or (exact_identity and history.is_handled(identity))):
+        if not self.manual and ((candidate_is_exact and history.is_handled(candidate_key))
+                                or (exact_identity and history.is_handled(identity))):
             return SubscribeOutcome(SubscribeStatus.ALREADY_HANDLED, item)
 
         # 3. pre 过滤（识别前）。被过滤者记录但不标记已处理 → 可被其他渠道/下一轮重试。
@@ -119,6 +123,8 @@ class SubscribeExecutor:
         is_tv = mediainfo.type == MediaType.TV
         # 宿主返回的媒体对象可能来自共享缓存，目标季/剧集组只能写入本次副本。
         mediainfo = deepcopy(mediainfo)
+        if self.manual and mediainfo.type != item.type_hint:
+            raise ValueError("识别结果类型与手动选择不一致，请补充正确的媒体 ID")
         sub_season = item.season if item.season is not None else mediainfo.season
         # 整剧忽略无需先确定订阅季，避免被「季号不明确」分支抢先短路。
         if self.blacklist.match(mediainfo, season=sub_season if is_tv else None):
@@ -158,7 +164,7 @@ class SubscribeExecutor:
                                  sub_season if is_tv else None, rid)
 
         # 原始榜单身份可能与宿主规范身份不同，识别后仍须查持久成功状态。
-        if history.is_handled(rid):
+        if not self.manual and history.is_handled(rid):
             if candidate_is_exact:
                 history.mark_handled(candidate_key, rid, provider.provider_id)
             return SubscribeOutcome(SubscribeStatus.ALREADY_HANDLED, item, mediainfo=mediainfo)
@@ -211,6 +217,7 @@ class SubscribeExecutor:
                 music_type=getattr(mediainfo, "music_type", None),
                 exist_ok=self.gcfg.exist_ok,
                 username=self.gcfg.username,
+                **self.subscribe_options,
             )
         if sid:
             self._record(history, rid, provider, item, mediainfo, sub_season,

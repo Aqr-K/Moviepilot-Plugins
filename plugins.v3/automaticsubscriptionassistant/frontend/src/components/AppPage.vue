@@ -1,5 +1,5 @@
 <template>
-  <Page :api="api" initial-view="blacklist" :show_switch="false" @close="emit('close')" />
+  <Page :api="api" initial-view="history" sidebar :show_switch="false" @close="emit('close')" />
 </template>
 
 <script setup>

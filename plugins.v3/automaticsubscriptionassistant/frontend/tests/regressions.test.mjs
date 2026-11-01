@@ -16,6 +16,7 @@ function component(name, props, exports, overrides = {}) {
     watch: Vue.watch,
     nextTick: Vue.nextTick,
     getCurrentInstance: () => null,
+    inject: () => null,
     onMounted: () => {},
     onUnmounted: () => {},
     onBeforeUnmount: () => {},
@@ -357,4 +358,359 @@ test('仪表盘结果分布包含旧状态，最近订阅明确显示特别篇�
     assert.equal(view.segments.value.rows.find(row => row.key === 'other').count, 2)
     assert.equal(view.mediaName({ title: '测试剧', type: '电视剧', season: 0, episode_group: 'group-a' }), '测试剧 · S00 · 剧集组: group-a')
   } finally { view.stopRefresh(); view.dispose() }
+})
+
+function sidebarHistory(api, exports) {
+  return component('Page', { api, sidebar: true, initialView: 'history', show_switch: false }, exports,
+    { window: { innerWidth: 1280 } })
+}
+const historyRows = (start, count) => Array.from({ length: count }, (_, i) => ({ unique: `history-${start + i}`, title: `剧集 ${start + i}` }))
+
+test('侧栏滚动加载保留已有卡片，合并重叠项并阻止同页并发请求', async () => {
+  const next = deferred()
+  const requests = []
+  const page = sidebarHistory({ get: url => {
+    requests.push(url)
+    return requests.length === 1 ? Promise.resolve({ list: historyRows(1, 24), total: 80 }) : next.promise
+  } }, ['fetchHistory', 'loadMoreHistory', 'items', 'historyHasMore', 'historyLoadedPage'])
+  try {
+    await page.fetchHistory()
+    const pending = page.loadMoreHistory()
+    await page.loadMoreHistory()
+    assert.equal(requests.length, 2)
+    assert.match(requests[1], /page=2&count=24/)
+    assert.equal(page.items.value.length, 24)
+    next.resolve({ list: historyRows(24, 24), total: 80 })
+    await pending
+    assert.equal(page.items.value.length, 47)
+    assert.equal(page.items.value[0].unique, 'history-1')
+    assert.equal(page.historyLoadedPage.value, 2)
+    assert.equal(page.historyHasMore.value, true)
+  } finally { page.dispose() }
+})
+
+test('滚动加载失败保留卡片，重试使用同一页而不是跳过失败页', async () => {
+  for (const failure of [new Error('临时失败'), { code: 1, message: '临时失败' }]) {
+    const requests = []
+    const page = sidebarHistory({ get: async url => {
+      requests.push(url)
+      if (requests.length === 2) {
+        if (failure instanceof Error) throw failure
+        return failure
+      }
+      return { list: historyRows(requests.length === 1 ? 1 : 25, 24), total: 48 }
+    } }, ['fetchHistory', 'loadMoreHistory', 'items', 'historyMoreError', 'historyHasMore'])
+    try {
+      await page.fetchHistory()
+      await page.loadMoreHistory()
+      assert.equal(page.items.value.length, 24)
+      assert.match(page.historyMoreError.value, /临时失败/)
+      await page.loadMoreHistory()
+      assert.equal(requests[1], requests[2])
+      assert.equal(page.items.value.length, 48)
+      assert.equal(page.historyMoreError.value, '')
+      assert.equal(page.historyHasMore.value, false)
+    } finally { page.dispose() }
+  }
+})
+
+
+test('筛选重置后，旧的滚动请求不能追加到新结果中', async () => {
+  const old = deferred()
+  const requests = []
+  const page = sidebarHistory({ get: url => {
+    requests.push(url)
+    if (requests.length === 2) return old.promise
+    return Promise.resolve(requests.length === 1 ? { list: historyRows(1, 24), total: 80 }
+      : { list: [{ unique: 'filtered', title: '筛选后' }], total: 1 })
+  } }, ['fetchHistory', 'loadMoreHistory', 'items', 'filters', 'historyHasMore'])
+  try {
+    await page.fetchHistory()
+    const pending = page.loadMoreHistory()
+    page.filters.statuses.push('subscribed')
+    await page.fetchHistory()
+    old.resolve({ list: historyRows(25, 24), total: 80 })
+    await pending
+    assert.match(requests[2], /status=subscribed/)
+    assert.match(requests[2], /page=1&count=24/)
+    assert.deepEqual(page.items.value.map(item => item.unique), ['filtered'])
+    assert.equal(page.historyHasMore.value, false)
+  } finally { page.dispose() }
+})
+
+test('后端返回空页或整页重复记录后停止继续加载', async () => {
+  for (const response of [{ list: [], total: 80 }, { list: historyRows(1, 24), total: 80 }]) {
+    let requests = 0
+    const page = sidebarHistory({ get: async () => ++requests === 1 ? { list: historyRows(1, 24), total: 80 } : response },
+      ['fetchHistory', 'loadMoreHistory', 'historyHasMore'])
+    try {
+      await page.fetchHistory()
+      await page.loadMoreHistory()
+      assert.equal(page.historyHasMore.value, false)
+      await page.loadMoreHistory()
+      assert.equal(requests, 2)
+    } finally { page.dispose() }
+  }
+})
+
+test('手机侧栏和桌面详情页继续按页查询，不启用连续加载', async () => {
+  for (const [sidebar, width] of [[true, 390], [false, 1280]]) {
+    const requests = []
+    const page = component('Page', { api: { get: async url => { requests.push(url); return { list: historyRows(1, 10), total: 100 } } },
+      sidebar, initialView: 'history' }, ['fetchHistory', 'loadMoreHistory', 'page', 'sidebarDesktop'], { window: { innerWidth: width } })
+    try {
+      page.page.value = 3
+      await page.fetchHistory()
+      assert.equal(page.sidebarDesktop.value, false)
+      assert.match(requests[0], /page=3&count=10/)
+      await page.loadMoreHistory()
+      assert.equal(requests.length, 1)
+    } finally { page.dispose() }
+  }
+})
+
+test('管理和黑名单逐批呈现，筛选与显示模式切换重置可见范围', async () => {
+  for (const name of ['SubscribeView', 'BlacklistView']) {
+    const props = Vue.reactive({ api: {}, progressive: true, pageSize: 24, page: 2 })
+    const view = component(name, props, ['rows', 'paged', 'loadMore', 'filters', 'visibleCount'])
+    try {
+      view.rows.value = Array.from({ length: 60 }, (_, id) => ({ id, title: `剧集 ${id}`, name: `剧集 ${id}` }))
+      await Vue.nextTick()
+      assert.equal(view.paged.value[0].id, 0)
+      assert.equal(view.paged.value.length, 24)
+      view.loadMore()
+      assert.equal(view.paged.value.length, 48)
+      view.filters.keyword = '剧集 59'
+      await Vue.nextTick()
+      assert.deepEqual(view.paged.value.map(item => item.id), [59])
+      assert.equal(view.visibleCount.value, 24)
+      view.filters.keyword = ''
+      props.progressive = false
+      await Vue.nextTick()
+      assert.equal(view.paged.value[0].id, 24)
+      assert.equal(view.paged.value.length, 24)
+    } finally { view.dispose() }
+  }
+})
+
+test('连续加载观察器在报错和卸载时释放，迟到回调不重复触发加载', async () => {
+  const observers = []
+  let unmount
+  class Observer {
+    constructor(callback, options) { this.callback = callback; this.options = options; this.disconnected = false; observers.push(this) }
+    observe() {}
+    disconnect() { this.disconnected = true }
+  }
+  const props = Vue.reactive({ progressive: true, count: 24, loading: false, hasMore: true, error: '' })
+  const list = component('ProgressiveList', props, ['scrollRef', 'sentinelRef'], {
+    IntersectionObserver: Observer, onBeforeUnmount: callback => { unmount = callback },
+  })
+  try {
+    list.scrollRef.value = { scrollTop: 0 }
+    list.sentinelRef.value = {}
+    await Vue.nextTick()
+    const observer = observers.at(-1)
+    assert(observer)
+    assert.equal(observer.options.root, list.scrollRef.value)
+    observer.callback([{ isIntersecting: true }])
+    assert.equal(list.events.length, 1)
+    props.error = '加载失败'
+    await Vue.nextTick()
+    assert.equal(observer.disconnected, true)
+    observer.callback([{ isIntersecting: true }])
+    assert.equal(list.events.length, 1)
+    props.error = ''
+    await Vue.nextTick()
+    await Vue.nextTick()
+    const retry = observers.at(-1)
+    assert.notEqual(retry, observer)
+    unmount()
+    assert.equal(retry.disconnected, true)
+    retry.callback([{ isIntersecting: true }])
+    assert.equal(list.events.length, 1)
+  } finally { unmount?.(); list.dispose() }
+})
+
+test('订阅卡片向宿主管理入口只传操作和订阅 ID，保存后才刷新列表', async () => {
+  const requests = []
+  const gets = []
+  const view = component('SubscribeView', { api: { get: async url => { gets.push(url); return { list: [] } } }, pageSize: 12, page: 1 },
+    ['runNative', 'error'], { inject: () => async request => { requests.push(request); return { success: true } } })
+  try {
+    await view.runNative('edit', { id: 7, media_source: 'wrong', media_id: 'wrong' })
+    assert.equal(requests[0].action, 'edit')
+    assert.equal(requests[0].subscriptionId, 7)
+    assert(!('media_id' in requests[0]))
+    assert.equal(gets.length, 0)
+    await requests[0].onChanged()
+    assert.deepEqual(gets, ['plugin/AutomaticSubscriptionAssistant/subscribes'])
+    assert(view.events.some(([event]) => event === 'changed'))
+  } finally { view.dispose() }
+})
+
+test('同一卡片原生操作不并发提交，取消确认不显示错误', async () => {
+  const pending = deferred()
+  let calls = 0
+  const view = component('SubscribeView', { api: {}, pageSize: 12, page: 1 }, ['runNative', 'error', 'nativePending'],
+    { inject: () => () => { calls++; return pending.promise } })
+  try {
+    const request = view.runNative('reset', { id: 7 })
+    await view.runNative('reset', { id: 7 })
+    assert.equal(calls, 1)
+    assert(view.nativePending.has(7))
+    pending.resolve({ success: false, cancelled: true })
+    await request
+    assert.equal(view.error.value, '')
+    assert.equal(view.nativePending.size, 0)
+  } finally { view.dispose() }
+})
+
+test('旧宿主明确提示新增原生能力缺失，并保留原有暂停和取消订阅流程', async () => {
+  const view = component('SubscribeView', { api: {}, pageSize: 12, page: 1 }, ['runNative', 'error', 'confirm'])
+  try {
+    await view.runNative('edit', { id: 7 })
+    assert.match(view.error.value, /主程序/)
+    await view.runNative('pause', { id: 7 })
+    assert.equal(view.confirm.kind, 'pause')
+    assert.deepEqual(view.confirm.ids, [7])
+    await view.runNative('delete', { id: 7 })
+    assert.equal(view.confirm.kind, 'delete')
+  } finally { view.dispose() }
+})
+
+test('原生 API 失败展示错误，视图卸载后保存回调不再刷新', async () => {
+  let request
+  let unmount
+  let gets = 0
+  const view = component('SubscribeView', { api: { get: async () => { gets++; return { list: [] } } }, pageSize: 12, page: 1 },
+    ['runNative', 'error'], {
+      inject: () => async value => { request = value; return { success: false, message: '无权编辑此订阅' } },
+      onBeforeUnmount: callback => { unmount = callback },
+    })
+  try {
+    await view.runNative('edit', { id: 7 })
+    assert.equal(view.error.value, '无权编辑此订阅')
+    unmount()
+    await request.onChanged()
+    assert.equal(gets, 0)
+  } finally { view.dispose() }
+})
+
+const supplementTarget = { unique: 'original', title: '测试剧', year: '2026', type: '电视剧', season: 0,
+  media_source: 'douban', media_id: 'old-id', episode_group: 'special-group' }
+function supplementDialog(api, exports, overrides) {
+  return component('SupplementDialog', { api, target: supplementTarget, modelValue: true },
+    ['resetForm', ...exports], overrides)
+}
+
+test('补充编辑显式保留特别篇和剧集组，清空身份后不携带旧来源 ID', () => {
+  const dialog = supplementDialog({}, ['media', 'subscription', 'buildRequest'])
+  try {
+    dialog.resetForm()
+    assert.equal(dialog.buildRequest().media.season, 0)
+    assert.equal(dialog.buildRequest().media.episode_group, 'special-group')
+    dialog.media.media_source = null
+    dialog.media.media_id = ''
+    dialog.media.title = '新片名'
+    Object.assign(dialog.subscription, { search_interval: '6', quality: 'WEB-?DL', total_episode: '12', start_episode: '3', mode: 'best', exist_ok: false })
+    const request = dialog.buildRequest()
+    assert.equal(request.media.media_source, null)
+    assert.equal(request.media.media_id, '')
+    assert.equal(request.media.title, '新片名')
+    assert.equal(request.subscription.search_interval, 6)
+    assert.equal(request.subscription.start_episode, 3)
+    assert.equal(request.subscription.best_version, 1)
+    assert.equal(request.exist_ok, false)
+    assert(!('username' in request.subscription))
+  } finally { dialog.dispose() }
+})
+
+test('补充编辑拒绝空标题、不完整媒体身份和小数季号，不发送创建请求', async () => {
+  let requests = 0
+  const dialog = supplementDialog({ post: async () => { requests++; return {} } }, ['media', 'submit', 'feedback'])
+  try {
+    dialog.resetForm()
+    dialog.media.title = ''
+    await dialog.submit()
+    assert(dialog.feedback.value)
+    dialog.resetForm()
+    dialog.media.media_id = ''
+    await dialog.submit()
+    assert(dialog.feedback.value)
+    dialog.resetForm()
+    dialog.media.season = '2.5'
+    await dialog.submit()
+    assert(dialog.feedback.value)
+    assert.equal(requests, 0)
+  } finally { dialog.dispose() }
+})
+
+test('补充编辑只提交一次，实际创建成功后通知刷新并关闭', async () => {
+  const pending = deferred()
+  const requests = []
+  const dialog = supplementDialog({ post: (...args) => { requests.push(args); return pending.promise } }, ['submit', 'busy'])
+  try {
+    dialog.resetForm()
+    const first = dialog.submit()
+    await dialog.submit()
+    assert.equal(dialog.busy.value, true)
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0][0], 'plugin/AutomaticSubscriptionAssistant/history/supplement')
+    pending.resolve({ code: 0, created: true, status: 'subscribed', subscribe_id: 77 })
+    await first
+    assert(dialog.events.some(([event]) => event === 'changed'))
+    assert(dialog.events.some(([event, value]) => event === 'update:modelValue' && value === false))
+  } finally { dialog.dispose() }
+})
+
+test('未创建、验证失败或网络失败均保留补充表单，展示原因供修改重试', async () => {
+  for (const result of [
+    { code: 0, created: false, status: 'blacklisted', message: '已加入黑名单' },
+    { code: 1, message: '设置不正确' },
+    new Error('网络失败'),
+  ]) {
+    const dialog = supplementDialog({ post: async () => { if (result instanceof Error) throw result; return result } },
+      ['submit', 'media', 'feedback', 'busy'])
+    try {
+      dialog.resetForm()
+      await dialog.submit()
+      assert.equal(dialog.media.title, '测试剧')
+      assert(dialog.feedback.value)
+      assert.equal(dialog.busy.value, false)
+      assert(!dialog.events.some(([event]) => event === 'update:modelValue'))
+    } finally { dialog.dispose() }
+  }
+})
+
+test('选项支持宿主 envelope，晚到响应不能覆盖重新打开后的选项', async () => {
+  const old = deferred()
+  let sites = 0
+  const dialog = supplementDialog({ get: async url => {
+    if (url === 'site/rss') return ++sites === 1 ? old.promise : { success: true, data: [{ id: 2, name: '新站点' }] }
+    if (url === 'download/clients') return { success: true, data: [{ name: 'client' }] }
+    return { success: true, data: { rule_groups: [{ name: 'rules' }] } }
+  } }, ['loadOptions', 'siteOptions', 'downloaderOptions', 'ruleOptions'])
+  try {
+    const first = dialog.loadOptions()
+    await dialog.loadOptions()
+    old.resolve({ success: true, data: [{ id: 1, name: '旧站点' }] })
+    await first
+    assert.deepEqual(dialog.siteOptions.value, [{ title: '新站点', value: 2 }])
+    assert.deepEqual(dialog.downloaderOptions.value, [{ title: 'client', value: 'client' }])
+    assert.deepEqual(dialog.ruleOptions.value, [{ title: 'rules', value: 'rules' }])
+  } finally { dialog.dispose() }
+})
+
+test('补充编辑卸载后不处理迟到创建响应', async () => {
+  const pending = deferred()
+  let unmount
+  const dialog = supplementDialog({ post: () => pending.promise }, ['submit'], { onBeforeUnmount: callback => { unmount = callback } })
+  try {
+    dialog.resetForm()
+    const request = dialog.submit()
+    unmount()
+    pending.resolve({ code: 0, created: true })
+    await request
+    assert.equal(dialog.events.length, 0)
+  } finally { dialog.dispose() }
 })

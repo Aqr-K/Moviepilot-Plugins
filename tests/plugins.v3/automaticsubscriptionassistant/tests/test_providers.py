@@ -4,17 +4,18 @@ from __future__ import annotations
 import threading
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.adapters.external.server import MoviePilotServerHelper
-from app.adapters.network.browser import PlaywrightHelper
 from app.schemas.types import MediaType
 from app.sdk.network import RequestUtils
 
 from app.plugins.automaticsubscriptionassistant.providers.douban import DoubanRankProvider
 from app.plugins.automaticsubscriptionassistant.providers.maoyan import MaoyanRankProvider
 from app.plugins.automaticsubscriptionassistant.providers.popular import PopularRankProvider
+from app.plugins.automaticsubscriptionassistant.providers import maoyan as maoyan_mod
 from app.plugins.automaticsubscriptionassistant.providers import netflix as netflix_mod
 from app.plugins.automaticsubscriptionassistant.providers.netflix import NetflixRankProvider
 
@@ -134,7 +135,7 @@ def _maoyan_payload(url):
 
 
 def test_maoyan_fetch_ignores_retired_endpoint(monkeypatch):
-    monkeypatch.setattr(PlaywrightHelper, "action", lambda self, *a, **k: {})  # 无 Cookie 降级
+    monkeypatch.setattr(MaoyanRankProvider, "_get_cookies", staticmethod(lambda: {}))  # 无 Cookie 降级
     monkeypatch.setattr(RequestUtils, "get_res",
                         lambda self, url, *a, **k: SimpleNamespace(json=lambda: _maoyan_payload(url)))
 
@@ -168,7 +169,7 @@ def test_maoyan_new_platforms_build_platform_type(monkeypatch):
     assert PLATFORM_TYPE["mgtv"] == "7"  # 芒果保持 7，不与 PPTV 撞码
 
     seen = []
-    monkeypatch.setattr(PlaywrightHelper, "action", lambda self, *a, **k: {})
+    monkeypatch.setattr(MaoyanRankProvider, "_get_cookies", staticmethod(lambda: {}))
     monkeypatch.setattr(RequestUtils, "get_res",
                         lambda self, url, *a, **k: seen.append(url) or SimpleNamespace(json=lambda: _maoyan_payload(url)))
     list(MaoyanRankProvider().fetch(
@@ -187,8 +188,8 @@ def test_douban_custom_address_fields_are_advanced():
 
 
 def test_maoyan_cookie_branch(monkeypatch):
-    # action 返回非空 cookies -> 走带 Cookie 请求分支
-    monkeypatch.setattr(PlaywrightHelper, "action", lambda self, *a, **k: {"uuid": "x"})
+    # 浏览器返回非空 Cookie 时带入 HTTP 请求。
+    monkeypatch.setattr(MaoyanRankProvider, "_get_cookies", staticmethod(lambda: {"uuid": "x"}))
     seen = {}
 
     def _fake(self, url, *a, **k):
@@ -202,15 +203,42 @@ def test_maoyan_cookie_branch(monkeypatch):
 
 
 def test_maoyan_cookies_failure_degrades(monkeypatch):
-    def _raise(self, *a, **k):
+    def _raise(*a, **k):
         raise RuntimeError("no browser")
 
-    monkeypatch.setattr(PlaywrightHelper, "action", _raise)
+    monkeypatch.setattr(maoyan_mod, "launch_browser_context", _raise)
     monkeypatch.setattr(RequestUtils, "get_res",
                         lambda self, url, *a, **k: SimpleNamespace(json=lambda: _maoyan_payload(url)))
     # 浏览器异常降级空 Cookie，仍能解析
     items = list(MaoyanRankProvider().fetch({"types": ["movie"], "num": 5}, None))
     assert len(items) == 1
+
+
+@pytest.mark.parametrize("failure", [None, "new_page", "goto", "cookies", "close", "networkidle"])
+def test_maoyan_browser_sdk_cookie_lifecycle(monkeypatch, failure):
+    """
+    浏览器 SDK 上下文始终释放，读取失败降级，清理失败不丢弃已取得的 Cookie。
+    """
+    context = MagicMock()
+    page = context.new_page.return_value
+    context.cookies.return_value = [{"name": "uuid", "value": "x"}]
+    launch = MagicMock(return_value=context)
+    monkeypatch.setattr(maoyan_mod, "launch_browser_context", launch)
+    failing_call = {
+        "new_page": context.new_page, "goto": page.goto,
+        "cookies": context.cookies, "close": context.close,
+        "networkidle": page.wait_for_load_state,
+    }.get(failure)
+    if failing_call is not None:
+        failing_call.side_effect = RuntimeError("browser unavailable")
+
+    result = MaoyanRankProvider._get_cookies()
+
+    assert result == ({} if failure in {"new_page", "goto", "cookies"} else {"uuid": "x"})
+    assert launch.call_args.kwargs["headless"] is True
+    context.close.assert_called_once()
+    if failure != "new_page":
+        page.goto.assert_called_once_with(maoyan_mod.MAOYAN_URL, wait_until="domcontentloaded", timeout=60_000)
 
 
 def test_maoyan_year_from_release_info():
@@ -221,7 +249,7 @@ def test_maoyan_year_from_release_info():
 
 
 def test_maoyan_no_response(monkeypatch):
-    monkeypatch.setattr(PlaywrightHelper, "action", lambda self, *a, **k: {})
+    monkeypatch.setattr(MaoyanRankProvider, "_get_cookies", staticmethod(lambda: {}))
     monkeypatch.setattr(RequestUtils, "get_res", lambda self, url, *a, **k: None)
     items = list(MaoyanRankProvider().fetch({"types": ["movie"], "num": 5}, None))
     assert items == []
@@ -830,6 +858,27 @@ def _kv_context(store=None, fail_save=False, fail_get=False):
         kv[key] = value
 
     return SimpleNamespace(event=None, get_data=_get, save_data=_save), kv
+
+
+@pytest.mark.parametrize("invalid_store", [[], ["invalid"], "", "invalid", 0, 12])
+def test_netflix_l2_invalid_store_is_preserved(monkeypatch, invalid_store):
+    """
+    持久化缓存格式异常时继续抓取并使用内存缓存，保留原始数据。
+    """
+    counter = {"n": 0}
+    monkeypatch.setattr(RequestUtils, "get_res", _counting_netflix_get(counter))
+    _fix_now(monkeypatch, 1_000_000.0)
+    ctx, kv = _kv_context(store={netflix_mod._CACHE_DATA_KEY: invalid_store})
+    cfg = {"global": True, "global_dataset": "most-popular",
+           "global_media_types": ["Films (English)"], "countries": [], "limit": 2}
+
+    items = list(NetflixRankProvider().fetch(cfg, ctx))
+    assert [item.title for item in items] == ["MovieA", "MovieB"]
+    assert kv[netflix_mod._CACHE_DATA_KEY] is invalid_store
+    request_count = counter["n"]
+    assert request_count > 0
+    assert [item.title for item in NetflixRankProvider().fetch(cfg, ctx)] == ["MovieA", "MovieB"]
+    assert counter["n"] == request_count
 
 
 def test_netflix_l2_survives_restart(monkeypatch):

@@ -1,13 +1,24 @@
 """订阅手动管理：列出本插件订阅、批量退订、批量暂停/恢复。
 
-与订阅落地（executor/runner）解耦：只依赖注入的 ``oper``（SubscribeOper 鸭子类型）与
-``on_deleted`` 回调（由插件侧发 ``EventType.SubscribeDeleted`` 事件），本模块可离线单测。
+读取订阅使用官方查询 SDK 的只读快照；写入依赖注入的 ``oper``，删除后由
+``on_deleted`` 回调发送 ``EventType.SubscribeDeleted`` 事件，本模块可离线单测。
 
 退订走主程序标准语义：删除订阅 + 通过回调发送 SubscribeDeleted 事件，触发其他组件清理。
 """
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
+
+from app.sdk import queries as subscription_queries
+from app.sdk.queries import (
+    MAX_QUERY_PAGE_SIZE,
+    QueryPageRequest,
+    QuerySort,
+    QuerySortDirection,
+    QuerySortField,
+    SubscriptionFilter,
+    SubscriptionSnapshot,
+)
 
 # 允许的订阅状态：R=订阅中/恢复，P=待定，S=暂停（与主程序 subscribe 状态一致）。
 VALID_STATES = ("R", "P", "S")
@@ -22,28 +33,66 @@ _FIELDS = ("id", "name", "year", "type", "media_source", "media_id", "season",
            "last_update")
 
 
+def list_subscriptions(username: Optional[str] = None, *, queries=subscription_queries) -> List[SubscriptionSnapshot]:
+    """
+    使用官方查询 SDK 按稳定顺序读取全部订阅，避免只读取默认第一页。
+
+    :param username: 精确匹配的订阅用户名；None 表示不限用户名
+    :param queries: 宿主查询 SDK；测试可注入隔离实现
+    :return: 所有匹配订阅的只读快照，查询失败向调用方传播
+    """
+    filters = SubscriptionFilter(usernames=(username,) if username is not None else ())
+    result = []
+    page_number = 1
+    while True:
+        page = queries.list_subscriptions(
+            filters=filters,
+            page=QueryPageRequest(
+                page=page_number, count=MAX_QUERY_PAGE_SIZE,
+                sort=QuerySort(field=QuerySortField.ID, direction=QuerySortDirection.ASC)),
+        )
+        result.extend(page.items)
+        if not page.items or not page.has_next:
+            return result
+        page_number += 1
+
+
 class SubscribeManager:
     """本插件订阅的手动管理器。"""
 
     def __init__(self, oper, username: str = PLUGIN_USERNAME,
-                 on_deleted: Optional[Callable] = None):
+                 on_deleted: Optional[Callable] = None, *, queries=subscription_queries):
+        """
+        绑定订阅写入端口与官方查询 SDK，所有写操作均先复核快照中的归属。
+
+        :param oper: 宿主订阅写入接口，仅用于删除和状态更新
+        :param username: 本插件创建订阅时使用的用户名
+        :param on_deleted: 删除成功后的事件通知回调
+        :param queries: 宿主查询 SDK；测试可注入隔离实现
+        """
         self.oper = oper                # SubscribeOper（注入，便于测试）
+        self.queries = queries
         self.username = username
         self.on_deleted = on_deleted    # on_deleted(sid, sub)：删除成功后回调（插件侧发事件）
 
     def list_mine(self) -> List[dict]:
-        """列出本插件创建的订阅（按 username 过滤），映射为前端 dict。"""
-        subs = self.oper.list_by_username(self.username) or []
+        """
+        通过官方查询 SDK 列出本插件创建的订阅，映射为前端字典。
+
+        :return: 按配置用户名精确筛选的全部订阅
+        """
+        subs = list_subscriptions(self.username, queries=self.queries)
         return [self._to_dict(s) for s in subs]
 
     def _owned(self, sid):
-        """取属于本插件的订阅，不存在或不属于本插件时返回 None。
+        """
+        取属于本插件的订阅，不存在或不属于本插件时返回 None。
 
         ``list_mine`` 按用户名过滤后才交给前端，但订阅 ID 是自增整数、极易猜到，
         写操作若只凭 ID 就动手，任何能调到本端点的人都能改掉别人的订阅。故写路径
         一律先用同一条用户名判据复核归属。
         """
-        sub = self.oper.get(sid)
+        sub = self.queries.get_subscription(sid)
         if sub is None or getattr(sub, "username", None) != self.username:
             return None
         return sub

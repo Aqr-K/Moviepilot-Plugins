@@ -1,6 +1,6 @@
 # 自动订阅助手 v3 架构
 
-本插件后续仅维护、测试和发布 MoviePilot v3 版本。源码位于 `plugins.v3/automaticsubscriptionassistant/`，安装后由宿主加载到 `app/plugins/automaticsubscriptionassistant/`。本文以该目录下 3.2.0 的实现为依据；具体发布版本以 Release 为准。
+本插件后续仅维护、测试和发布 MoviePilot v3 版本。源码位于 `plugins.v3/automaticsubscriptionassistant/`，安装后由宿主加载到 `app/plugins/automaticsubscriptionassistant/`。本文以该目录当前源码为依据，对应插件 3.3.0；发行包以 Release 为准。
 
 ## 模块职责
 
@@ -21,6 +21,35 @@
 | `core/models.py`、`core/i18n.py` | 候选、结果、配置描述与历史模型，来源名称和字段文本本地化 |
 
 来源只负责抓取与解析；识别、订阅和历史统一由 executor 处理。provider 可通过上下文中的 `get_data/save_data` 保存缓存，黑名单也使用这组宿主 KV 端口。
+
+## 宿主 SDK 与兼容边界
+
+插件优先使用宿主 `app.sdk` 中实际公开的稳定接口，不增加指向宿主私有实现的本地转导层。
+
+| 能力 | 使用入口 |
+| --- | --- |
+| 插件基类、KV 与插件数据库句柄 | `app.sdk.plugin._PluginBase` 及其公开方法 |
+| 配置、日志、事件与调度 | `app.sdk.config`、`app.sdk.logging`、`app.sdk.events`、`app.sdk.scheduler` |
+| HTTP、页面解析 | `app.sdk.network`、`app.sdk.utilities` |
+| 浏览器上下文 | `app.sdk.browser.launch_browser_context` |
+| 媒体对象、标题解析、来源规范化与身份规则 | `app.sdk.media` |
+| 插件自有表基类 | `app.sdk.database.plugin_declarative_base` |
+| 当前订阅列表与单条订阅快照 | `app.sdk.queries.list_subscriptions/get_subscription` |
+
+订阅预去重与管理列表通过查询 SDK 按 ID 升序读取所有页，不受默认单页数量限制；用户名在宿主查询端精确筛选。修改状态和取消订阅前仍重新读取快照校验归属。删除事件使用快照的 JSON 数据，不读取 ORM 表结构。
+
+猫眼浏览器在导航或 Cookie 读取失败时降级为空 Cookie 请求，所有路径均关闭上下文；关闭失败只告警，保留已取得的 Cookie。轻量浏览器 SDK 不包含旧私有 `PlaywrightHelper.action` 的 FlareSolverr 预处理；依赖该预处理才能访问猫眼的环境需要宿主提供相应公开能力。
+
+当前宿主 SDK 尚未覆盖以下接口，插件保留这些精确依赖：
+
+- `app.chain.download.DownloadChain`：媒体库完整性检查。
+- `app.chain.subscribe.SubscribeChain`：最终订阅查重和新增订阅。
+- `app.db.oper.subscribe.SubscribeOper`：删除订阅与修改状态；读取已迁至查询 SDK。
+- `app.adapters.external.server.MoviePilotServerHelper`：官方热门订阅统计及空结果诊断。
+
+`MediaType/MediaSource/EventType`、`ConfigChangeEventData`、`Subscribe` 继续使用公开的 `app.schemas` 模型；当前 SDK 没有对应导出。不使用 `app.sdk._legacy` 私有兼容入口替代这些依赖。最低宿主版本为 MoviePilot **3.0.3**：已核对官方标签，3.0.0–3.0.2 尚无 `app.sdk.plugin` 入口，3.0.3 已导出 `_PluginBase`；查询、浏览器和媒体接口也已公开。该版本要求按官方源码入口核定，本地完整回归使用当前开发宿主。
+
+`test_sdk_imports.py` 校验所有 SDK 导出真实存在，并限制剩余内部导入的文件、路径及符号。官方补齐接口后应同时更新实现和该检查。
 
 ## 执行流程
 
@@ -117,11 +146,19 @@ Netflix TSV 按 UTF-8 解码，以换行符分行，避免特殊字符误断行�
 
 缺少 cron 配置时使用来源默认值；后端显式空字符串不会注册任务。前端装载配置时会把空 cron 回填为来源默认值。保存配置会校验持久化结果，重新初始化插件并刷新宿主任务；空监听来源会被关闭。
 
+## 历史补充编辑
+
+`core/supplement.py` 校验并串行处理显式手动请求，通过 `Subscribe` 模型和参数白名单限制输入。用户清空身份后不恢复旧 ID；剧集要求显式季号。用户名固定来自插件配置，状态、订阅 ID 和下载事实不可由请求覆盖。
+
+手动调用 `SubscribeExecutor(manual=True)` 跳过推荐筛选及旧账本快速短路，重新执行识别、类型检查、黑名单、媒体库和宿主订阅查重；最终新增仍与黑名单变更使用同一把锁。成功写历史和账本，自动任务保持原来的持久去重规则；失败不撤销已有成功事实。返回处理状态与 `created`，前端不能把处理完成等同于新建成功。
+
 ## 前端、侧栏与 API
 
 详情/配置界面提供历史、管理、黑名单、配置四个标签。侧栏项以 `self.plugin_name` 显示“自动订阅助手”，使用 `mdi-rss`，归入 `subscribe` 分组、要求 `subscribe` 权限，保留 `nav_key=blacklist`。宿主聚合已启用插件的侧栏项；插件总开关和至少一个来源需启用。
 
-`AppPageBlacklist` 是独立联邦入口，透传属性到 `AppPage`；`AppPage` 复用 `Page` 并以黑名单为初始视图。`Page` 管理三类列表的共享分页和移动端行数。黑名单与历史复用 `MediaCard`、`FilterPanel`、`styles/mediaViews.css`，筛选草稿只有在应用后才生效。
+`AppPageBlacklist` 是独立联邦入口，透传属性到 `AppPage`；`AppPage` 复用 `Page` 并以订阅历史为初始视图。桌面侧栏固定页头、标签、统计与功能区，只让卡片列表滚动；`ProgressiveList` 观察列表底部并逐批加载，历史按每批 24 条请求后端，管理与黑名单逐批呈现前端筛选结果。切换筛选或刷新会重置加载范围，失败保留已加载内容并支持重试。详情弹窗与手机侧栏仍使用共享分页和移动端行数。黑名单与历史复用 `MediaCard`、`FilterPanel`、`styles/mediaViews.css`，筛选草稿只有在应用后才生效。
+
+订阅管理单卡操作通过 `moviepilot:subscriptionManager` 宿主入口复用原生编辑/活动弹窗、媒体路由及管理 API。宿主以订阅 ID 重新读取记录，权限和归属由主程序校验；插件只处理保存后的刷新，不把媒体快照或用户名作为授权依据。旧宿主缺少入口时保留原有暂停/恢复及取消订阅流程，并提示新增原生功能需要升级前端。
 
 所有插件路由声明见 `get_api()`；完整接口清单见[使用文档](../README.md#后端-api)。除 `DELETE /history` 为 `apikey` 外，其余均为 `bear`。批量管理须按 `ok_ids/failed_ids` 展示结果，不能只依据 `code=0` 清空全部选择。
 
