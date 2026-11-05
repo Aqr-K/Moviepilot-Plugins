@@ -9,9 +9,20 @@ from app.sdk.events import eventmanager
 from app.sdk.logging import logger
 
 from ..core.config import build_defaults
+from ..core.config_migration import backup_config, migrate_config
 
 
 class ConfigurationApiMixin:
+    def _upgrade_config(self, config):
+        """仅对旧结构执行一次升级；确认备份和持久化成功后才交给运行时。"""
+        migrated, changed = migrate_config(config, self._providers)
+        if changed:
+            path = backup_config(config, self.get_data_path() / "config-backups")
+            if self.update_config(migrated) is False or self.get_config() != migrated:
+                raise OSError("新配置写入或回读校验失败，原配置备份已保留")
+            logger.info(f"{self.plugin_name}：已自动迁移来源配置 {', '.join(changed)}；备份：{path}")
+        return migrated
+
     def api_get_config(self) -> dict[str, Any]:
         """返回当前配置；未保存过时回退为反射生成的默认配置。"""
         config = self.get_config()
@@ -19,13 +30,17 @@ class ConfigurationApiMixin:
             config = build_defaults(
                 [provider.get_spec() for provider in self._providers]
             )
-        return {"config": config}
+        if getattr(self, "_configuration_error", ""):
+            return {"code": 1, "message": self._configuration_error, "config": config}
+        return {"code": 0, "config": config}
 
     def api_save_config(self, request: dict | None = None) -> dict[str, Any]:
         """保存完整配置并重载：update_config 持久化 + init_plugin 重建调度。"""
         if not isinstance(request, dict):
             return {"code": 1, "message": "请求体必须为配置对象"}
         try:
+            original = request
+            request, migrated = migrate_config(request, self._providers)
             providers = request.get('providers', {})
             if not isinstance(providers, dict):
                 raise TypeError('来源配置必须为对象')
@@ -41,6 +56,8 @@ class ConfigurationApiMixin:
         # 状态检测兜底：启用了却无任何可监听内容的来源，保存时自动关闭其开关（与前端一致，防绕过前端直接保存）。
         self._auto_disable_empty_providers(request)
         try:
+            if migrated:
+                backup_config(original, self.get_data_path() / "config-backups")
             if self.update_config(request) is False:
                 return {"code": 1, "message": "配置保存失败，运行配置未变更"}
             # 重新装载：重建 settings/链/调度，并处理其中的一次性开关。

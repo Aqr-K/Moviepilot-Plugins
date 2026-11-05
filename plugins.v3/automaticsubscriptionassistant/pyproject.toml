@@ -1,6 +1,6 @@
 [project]
 name = "automaticsubscriptionassistant"
-version = "3.4.0"
+version = "3.4.1"
 description = "自动订阅助手的插件依赖清单"
 requires-python = ">=3.12"
 # apscheduler、beautifulsoup4、pytz、SQLAlchemy 与 Alembic 均由宿主运行时提供。

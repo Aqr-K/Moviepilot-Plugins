@@ -856,7 +856,7 @@ test('plugin dialog keeps configuration entry', () => {
 test('source notifications initialize independently and persist with configuration', () => {
   const config = component('Config', { api: {}, initialConfig: {
     global: { notify: true }, providers: { douban: { notify: true }, netflix: { notify: false } },
-  } }, ['config', 'providerSpecs', 'ensureProviderConfig', 'saveConfig', 'notifyingCount', 'changedCount', 'snapshot', 'flatten'])
+  } }, ['config', 'providerSpecs', 'ensureProviderConfig', 'saveConfig', 'notifyingCount', 'changedCount', 'snapshot', 'flatten', 'loading', 'configurationBlocked'])
   try {
     const ids = ['douban', 'popular', 'mikan', 'netflix', 'maoyan']
     config.providerSpecs.value = ids.map(provider_id => ({ provider_id, default_cron: '0 8 * * *' }))
@@ -870,6 +870,8 @@ test('source notifications initialize independently and persist with configurati
     config.config.providers.mikan.notify = true
     assert.equal(config.changedCount.value, 1)
     assert.equal(config.notifyingCount.value, 2)
+    config.loading.value = false
+    config.configurationBlocked.value = false
     config.saveConfig()
     const payload = config.events.find(event => event[0] === 'save')[1]
     assert.equal(payload.providers.douban.notify, true)
@@ -916,8 +918,10 @@ test('旧平铺来源配置不自动启用新默认规则，首次配置仍提�
   const config=component('Config',{initialConfig:{providers:{anilist:{options:{charts:[]},filters:{vote:8}}}}},['ensureProviderConfig','config'])
   const fresh=component('Config',{initialConfig:{}},['ensureProviderConfig','config'])
   try {
-    config.ensureProviderConfig(spec)
-    assert.deepEqual([...config.config.providers.anilist.options.rules],[])
+    assert.throws(() => config.ensureProviderConfig(spec), /尚未完成自动迁移/)
+    assert.deepEqual([...config.config.providers.anilist.options.charts], [])
+    assert.equal(config.config.providers.anilist.filters.vote, 8)
+    assert.equal(config.config.providers.anilist.options.rules, undefined)
     fresh.ensureProviderConfig(spec)
     assert.equal(fresh.config.providers.anilist.options.rules[0].name,'正在流行')
     fresh.config.providers.anilist.options.rules[0].name='changed'
@@ -939,4 +943,70 @@ test('插件页面打开不读取旧入口页签，也不跨窗口写入黑名�
     const reopened = component('Config', { initialConfig: {} }, ['navigationView'], { localStorage: storage })
     try { assert.equal(reopened.navigationView.value, '') } finally { reopened.dispose() }
   } finally { page.dispose(); config.dispose() }
+})
+
+test('配置页优先读取后端迁移结果，语言刷新不覆盖未保存编辑', async () => {
+  const old = { providers: { douban: { options: { ranks: ['tv-hot'] }, filters: { vote: 8 } } } }
+  const migrated = { global: { enabled: true }, providers: { douban: { enabled: true,
+    options: { rules: [{ id: 'migrated', chart: 'tv-hot', vote: 8 }] }, filters: {} } } }
+  const spec = { provider_id: 'douban', options_schema: [{ key: 'rules', kind: 'rule-list', default: [] }], filters_schema: [] }
+  let reads = 0
+  const config = component('Config', { initialConfig: old, api: { get: async url => {
+    if (url.endsWith('/config')) { reads++; return { code: 0, config: migrated } }
+    return { providers: [spec] }
+  } } }, ['loadProviders', 'config', 'saveConfig', 'configurationBlocked'])
+  try {
+    await config.loadProviders()
+    assert.equal(config.configurationBlocked.value, false)
+    assert.equal(config.config.providers.douban.options.rules[0].vote, 8)
+    config.config.providers.douban.options.rules[0].vote = 9
+    await config.loadProviders()
+    assert.equal(reads, 1)
+    assert.equal(config.config.providers.douban.options.rules[0].vote, 9)
+    config.saveConfig()
+    assert.equal(config.events.find(event => event[0] === 'save')[1].providers.douban.options.rules[0].vote, 9)
+    assert.deepEqual(old.providers.douban.options.ranks, ['tv-hot'])
+  } finally { config.dispose() }
+})
+
+for (const outcome of ['failed', 'unavailable', 'legacy']) test(`配置升级 ${outcome} 时保留旧字段并禁止保存`, async () => {
+  const old = { providers: { douban: { options: { ranks: ['tv-hot'] }, filters: { vote: 8 } } } }
+  const config = component('Config', { initialConfig: old, api: { get: async url => {
+    if (url.endsWith('/config')) {
+      if (outcome === 'unavailable') throw new Error('offline')
+      return outcome === 'failed' ? { code: 1, message: '备份失败', config: old } : { code: 0, config: old }
+    }
+    return { providers: [{ provider_id: 'douban', options_schema: [{ key: 'rules', kind: 'rule-list', default: [] }], filters_schema: [] }] }
+  } } }, ['loadProviders', 'config', 'saveConfig', 'configurationBlocked', 'error'])
+  try {
+    await config.loadProviders()
+    assert.equal(config.configurationBlocked.value, true)
+    assert(config.error.value)
+    assert.deepEqual([...config.config.providers.douban.options.ranks], ['tv-hot'])
+    assert.equal(config.config.providers.douban.filters.vote, 8)
+    config.saveConfig()
+    assert.equal(config.events.filter(event => event[0] === 'save').length, 0)
+  } finally { config.dispose() }
+})
+
+test('来源标签刷新失败后重试也不覆盖已加载的配置草稿', async () => {
+  let configReads = 0
+  let failProviders = false
+  const config = component('Config', { initialConfig: {}, api: { get: async url => {
+    if (url.endsWith('/config')) { configReads++; return { config: { providers: { douban: { options: { rules: [] } } } } } }
+    if (failProviders) throw new Error('offline')
+    return { providers: [{ provider_id: 'douban', options_schema: [{ key: 'rules', kind: 'rule-list', default: [] }], filters_schema: [] }] }
+  } } }, ['loadProviders', 'config', 'configurationBlocked'])
+  try {
+    await config.loadProviders()
+    config.config.providers.douban.options.rules.push({ id: 'draft', chart: 'tv-hot' })
+    failProviders = true
+    await config.loadProviders()
+    assert.equal(config.configurationBlocked.value, true)
+    failProviders = false
+    await config.loadProviders()
+    assert.equal(config.configurationBlocked.value, false)
+    assert.equal(configReads, 1)
+    assert.equal(config.config.providers.douban.options.rules[0].id, 'draft')
+  } finally { config.dispose() }
 })

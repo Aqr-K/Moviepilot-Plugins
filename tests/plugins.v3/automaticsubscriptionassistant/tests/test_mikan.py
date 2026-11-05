@@ -438,5 +438,5 @@ def test_mikan_spec_shape():
     assert rules.kind == 'rule-list'
     fields = {f.key:f for f in rules.fields}
     assert {o['value'] for o in fields['time'].options} == {'current','previous','next','fixed'}
-    assert {o['value'] for o in fields['season'].options} == set(mikan_mod.MIKAN_SEASONS)
+    assert {o['value'] for o in fields['season'].options} == set(mikan_mod.MIKAN_SEASONS) | {mikan_mod.SEASON_AUTO}
     assert spec.filters_schema == []
