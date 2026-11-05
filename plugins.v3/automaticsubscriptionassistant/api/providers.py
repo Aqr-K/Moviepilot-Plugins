@@ -22,6 +22,9 @@ class ProvidersApiMixin:
         self, request: dict | None = None, provider_id: str | None = None
     ) -> dict[str, Any]:
         """触发指定来源在 3 秒后运行一次（provider_id 支持 body 或 query）。"""
+        pid = provider_id or (request or {}).get("provider_id")
+        if pid in getattr(self, "_configuration_errors", {}):
+            return {"code": 1, "message": self._configuration_errors[pid]}
         if not self._database_ready:
             return {
                 "code": 1,
@@ -89,9 +92,19 @@ class ProvidersApiMixin:
         try:
             test_options = deepcopy(test_options)
             # 规则聚合必须收集后才产出；探测只请求首条启用规则的少量元数据。
-            if 'rules' in test_options:
-                enabled = [r for r in test_options['rules'] if r.get('on', True)]
-                test_options['rules'] = [{**r, **({'limit':min(int(r.get('limit', 3)), 3)} if pid != 'mikan' else {})} for r in enabled[:1]]
+            if "rules" in test_options:
+                enabled = [r for r in test_options["rules"] if r.get("on", True)]
+                test_options["rules"] = [
+                    {
+                        **r,
+                        **(
+                            {"limit": min(int(r.get("limit", 3)), 3)}
+                            if pid != "mikan"
+                            else {}
+                        ),
+                    }
+                    for r in enabled[:1]
+                ]
             count = 0
             sample = None
             # 仅消费前几条即 break：验证连通与产出，不遍历全部、不调用任何订阅/历史逻辑。

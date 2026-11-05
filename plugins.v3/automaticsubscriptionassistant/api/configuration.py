@@ -1,5 +1,6 @@
 """configuration HTTP 端点；使用入口提供的服务，不直接拥有数据库连接。"""
 
+from copy import deepcopy
 from typing import Any
 
 from app.schemas.event import ConfigChangeEventData
@@ -15,12 +16,37 @@ from ..core.config_migration import backup_config, migrate_config
 class ConfigurationApiMixin:
     def _upgrade_config(self, config):
         """仅对旧结构执行一次升级；确认备份和持久化成功后才交给运行时。"""
-        migrated, changed = migrate_config(config, self._providers)
-        if changed:
+        if not isinstance(config, dict) or not isinstance(
+            config.get("providers", {}), dict
+        ):
+            raise TypeError("插件或来源配置必须为对象，可在全局设置中还原默认配置")
+        migrated, changed = deepcopy(config), []
+        self._configuration_errors = {}
+        for provider in self._providers:
+            pid = provider.provider_id
+            if pid not in config.get("providers", {}):
+                continue
+            try:
+                result, updated = migrate_config(
+                    {"providers": {pid: config["providers"][pid]}}, [provider]
+                )
+                source = result["providers"][pid]
+                provider.validate_options(source.get("options", {}))
+                migrated["providers"][pid] = source
+                changed.extend(updated)
+            except (ValueError, TypeError) as exc:
+                self._configuration_errors[pid] = str(exc)
+                logger.warning(
+                    f"{self.plugin_name}：{provider.provider_name} 配置异常，仅暂停此来源：{exc}"
+                )
+        if changed or self._configuration_errors:
             path = backup_config(config, self.get_data_path() / "config-backups")
+        if changed:
             if self.update_config(migrated) is False or self.get_config() != migrated:
                 raise OSError("新配置写入或回读校验失败，原配置备份已保留")
-            logger.info(f"{self.plugin_name}：已自动迁移来源配置 {', '.join(changed)}；备份：{path}")
+            logger.info(
+                f"{self.plugin_name}：已自动迁移来源配置 {', '.join(changed)}；备份：{path}"
+            )
         return migrated
 
     def api_get_config(self) -> dict[str, Any]:
@@ -30,9 +56,38 @@ class ConfigurationApiMixin:
             config = build_defaults(
                 [provider.get_spec() for provider in self._providers]
             )
-        if getattr(self, "_configuration_error", ""):
-            return {"code": 1, "message": self._configuration_error, "config": config}
-        return {"code": 0, "config": config}
+        return {
+            "code": 0,
+            "config": config,
+            "provider_errors": getattr(self, "_configuration_errors", {}),
+            "warning": getattr(self, "_configuration_error", ""),
+        }
+
+    def api_reset_config(self, request: dict | None = None) -> dict[str, Any]:
+        """一次性维护：备份后还原配置，来源默认全部关闭，不操作历史或黑名单。"""
+        if not isinstance(request, dict) or request.get("confirmed") is not True:
+            return {"code": 1, "message": "请先确认还原全部默认配置"}
+        try:
+            original = self.get_config()
+            if original is None:
+                original = getattr(self, "_config", {})
+            backup_config(original, self.get_data_path() / "config-backups")
+            defaults = build_defaults(
+                [provider.get_spec() for provider in self._providers]
+            )
+            self.stop_service()
+            if self.update_config(defaults) is False or self.get_config() != defaults:
+                raise OSError("默认配置写入或回读失败，原配置备份已保留")
+            self.init_plugin(defaults)
+            self._refresh_jobs()
+            return {
+                "code": 0,
+                "message": "已还原全部默认配置，插件与所有来源均已关闭",
+                "config": defaults,
+            }
+        except Exception as exc:  # noqa: BLE001 - 维护失败保留备份与数据库内容
+            logger.error(f"{self.plugin_name}：还原默认配置失败：{exc}")
+            return {"code": 1, "message": f"还原默认配置失败：{exc}"}
 
     def api_save_config(self, request: dict | None = None) -> dict[str, Any]:
         """保存完整配置并重载：update_config 持久化 + init_plugin 重建调度。"""
@@ -40,19 +95,41 @@ class ConfigurationApiMixin:
             return {"code": 1, "message": "请求体必须为配置对象"}
         try:
             original = request
-            request, migrated = migrate_config(request, self._providers)
-            providers = request.get('providers', {})
+            if not isinstance(request.get("providers", {}), dict):
+                raise TypeError("来源配置必须为对象")
+            # 未修改的异常来源保留原件，允许先保存、修复其他来源。
+            preserved = {}
+            current = (
+                self.get_config() if getattr(self, "_configuration_errors", {}) else {}
+            )
+            for pid in getattr(self, "_configuration_errors", {}):
+                incoming = (request.get("providers") or {}).get(pid)
+                if pid in (request.get("providers") or {}) and incoming == (
+                    current.get("providers") or {}
+                ).get(pid):
+                    preserved[pid] = incoming
+            candidate = deepcopy(request)
+            for pid in preserved:
+                candidate["providers"].pop(pid, None)
+            request, migrated = migrate_config(candidate, self._providers)
+            providers = request.get("providers", {})
             if not isinstance(providers, dict):
-                raise TypeError('来源配置必须为对象')
+                raise TypeError("来源配置必须为对象")
             for provider in self._providers:
+                if provider.provider_id in preserved:
+                    continue
                 raw = providers.get(provider.provider_id, {})
-                if not isinstance(raw, dict) or not isinstance(raw.get('options', {}), dict):
-                    raise TypeError('来源选项必须为对象')
-                validate = getattr(provider, 'validate_options', None)
+                if not isinstance(raw, dict) or not isinstance(
+                    raw.get("options", {}), dict
+                ):
+                    raise TypeError("来源选项必须为对象")
+                validate = getattr(provider, "validate_options", None)
                 if validate:
-                    validate(raw.get('options', {}))
+                    validate(raw.get("options", {}))
+            if preserved:
+                request.setdefault("providers", {}).update(preserved)
         except (ValueError, TypeError) as exc:
-            return {'code':1, 'message':str(exc)}
+            return {"code": 1, "message": str(exc)}
         # 状态检测兜底：启用了却无任何可监听内容的来源，保存时自动关闭其开关（与前端一致，防绕过前端直接保存）。
         self._auto_disable_empty_providers(request)
         try:

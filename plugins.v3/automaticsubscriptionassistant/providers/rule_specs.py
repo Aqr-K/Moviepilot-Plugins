@@ -197,7 +197,10 @@ def definition(pid):
             pick(
                 "season",
                 "季度",
-                {"当前": "当前季度（自动）", **{s: s + "季" for s in ["冬", "春", "夏", "秋"]}},
+                {
+                    "当前": "当前季度（自动）",
+                    **{s: s + "季" for s in ["冬", "春", "夏", "秋"]},
+                },
                 "冬",
                 visible_when={"time": ["fixed"]},
             ),
@@ -422,4 +425,12 @@ def definition(pid):
             if pid == "spotify"
             else []
         )
+    # 配置层接受宽范围数值；请求端分别遵守接口容量，不让历史条数/年份等阻断升级。
+    # 仍拒绝负数、非有限数以及整数栏的小数。
+    for field in fields:
+        if field.kind in {"number", "float"}:
+            field.minimum = 0
+            field.maximum = None
+            if field.key == "limit":
+                field.hint = "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。"
     return fields, deepcopy(defaults), deepcopy(presets), shared

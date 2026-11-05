@@ -74,7 +74,6 @@ import DashboardComponent from './components/Dashboard.vue'
 import { createMockApi } from './dev/mockApi'
 
 const theme = useTheme()
-const api = createMockApi()
 
 // 开发壳模拟宿主的 $i18n：组件读 appContext.globalProperties.$i18n.locale 跟随语言
 const LANGS = ['zh-CN', 'zh-TW', 'en-US']
@@ -116,6 +115,7 @@ const mockConfig = {
     },
   },
 }
+const api = createMockApi(mockConfig)
 
 const dashConfig = reactive({
   id: 'AutomaticSubscriptionAssistant',

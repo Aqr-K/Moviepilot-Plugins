@@ -132,6 +132,15 @@
                     <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.global[field.key]" />
                   </div>
                 </div>
+                <div v-if="sec.title === t('secOneTime')" class="asa-row">
+                  <div class="asa-row__copy">
+                    <div class="asa-row__label">{{ t('restoreAll') }}</div>
+                    <p>{{ t('restoreHint') }}</p>
+                  </div>
+                  <div class="asa-row__control">
+                    <v-btn color="warning" variant="tonal" prepend-icon="mdi-backup-restore" @click="resetTarget = 'all'">{{ t('restoreAll') }}</v-btn>
+                  </div>
+                </div>
               </div>
             </section>
           </template>
@@ -155,6 +164,13 @@
               variant="tonal"
             >{{ activeSpec.notice }}</v-alert>
 
+            <v-alert v-if="providerIssues[activeGroup]" class="mb-3" type="warning" variant="tonal">
+              {{ providerIssues[activeGroup] }}
+              <p class="mt-2">{{ t('sourceRecoveryHint') }}</p>
+              <v-btn class="mt-2" variant="outlined" prepend-icon="mdi-backup-restore" @click="resetTarget = activeGroup">{{ t('restoreSource') }}</v-btn>
+            </v-alert>
+
+            <template v-if="!providerIssues[activeGroup]">
             <!-- 来源开关 + 定时 -->
             <section class="asa-section">
               <h3>1. {{ t('secSourceSchedule') }}</h3>
@@ -260,6 +276,7 @@
             </section>
 
             <!-- 立即运行 -->
+            </template>
             <div class="asa-run">
               <transition name="asa-fade">
                 <span
@@ -372,6 +389,16 @@
     </transition>
     </template>
   </section>
+    <v-dialog :model-value="!!resetTarget" max-width="520" :persistent="resetBusy" @update:model-value="value => { if (!value && !resetBusy) resetTarget = '' }">
+      <v-card>
+        <v-card-title>{{ resetTarget === 'all' ? t('restoreAll') : t('restoreSource') }}</v-card-title>
+        <v-card-text>
+          <p>{{ resetTarget === 'all' ? t('restoreConfirm') : t('restoreSourceConfirm') }}</p>
+          <v-alert v-if="resetError" class="mt-3" type="error" variant="tonal" density="compact">{{ resetError }}</v-alert>
+        </v-card-text>
+        <v-card-actions><v-spacer /><v-btn :disabled="resetBusy" variant="text" @click="resetTarget = ''">{{ t('cancelRestore') }}</v-btn><v-btn color="warning" variant="flat" :loading="resetBusy" @click="restoreDefaults">{{ t('confirmRestore') }}</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
 </template>
 
 <script setup>
@@ -398,6 +425,7 @@ const MSG = {
   'zh-CN': {
     plugin: '插件', title: '自动订阅助手', changes: '{n} 项改动', save: '保存', close: '关闭',
     settingsGroups: '设置分组', mediaSources: '媒体', musicSources: '音乐', globalHeading: '全局设置', globalDesc: '插件总开关与订阅归属，作用于所有来源',
+    restoreAll: '还原全部默认配置', restoreSource: '还原此来源默认配置', restoreHint: '一次性维护，执行前自动备份；还原后插件及全部来源关闭，历史与黑名单保留。', restoreConfirm: '确认还原全部默认配置？当前配置会先备份，未保存的修改将被放弃。此操作立即执行，历史、黑名单和已有订阅不受影响。', restoreSourceConfirm: '确认还原此来源默认配置？该来源将关闭，其他来源不变；保存配置后生效。', sourceRecoveryHint: '仅暂停此来源，原配置已保留。可单独还原后重新设置，其他来源可以继续使用和保存。', confirmRestore: '确认还原', cancelRestore: '取消', restoreFailed: '还原失败，请稍后重试',
     secRunning: '运行', secSubscription: '订阅', secOneTime: '一次性维护',
     'g.enabled.label': '启用插件', 'g.enabled.hint': '总开关，关闭后所有定时任务停止',
     sourceNotify: '运行通知', sourceNotifyHint: '发送该来源的运行结果或失败通知，不影响其他来源',
@@ -416,7 +444,7 @@ const MSG = {
     testConn: '连通性测试', testOk: '连通正常', testFail: '连通失败：', throttled: '操作过于频繁，请稍后再试',
     overview: '概览', ovSources: '启用来源', ovNotify: '通知来源', ovExistOk: '已存在仍订阅', on: '开', off: '关',
     navHistory: '订阅历史', navBlacklist: '黑名单', navManage: '订阅管理', navConfig: '订阅配置',
-    viewHistory: '查看订阅历史', unsaved: '{n} 项未保存', providersError: '获取来源列表失败，已按现有配置渲染：',
+    viewHistory: '查看订阅历史', unsaved: '{n} 项未保存', providersError: '获取来源列表失败：',
     help: '插件帮助', collapse: '收起侧栏', expand: '展开侧栏', runtimeTitle: '运行概览', back: '返回',
     processing: '处理中', procN: '已处理 {n} 条',
     rtTotal: '累计处理', rtLoading: '统计加载中…', rtEmpty: '暂无运行记录',
@@ -425,6 +453,7 @@ const MSG = {
   'zh-TW': {
     plugin: '外掛', title: '自動訂閱助手', changes: '{n} 項變更', save: '儲存', close: '關閉',
     settingsGroups: '設定分組', mediaSources: '媒體', musicSources: '音樂', globalHeading: '全域設定', globalDesc: '外掛總開關與訂閱歸屬，作用於所有來源',
+    restoreAll: '還原全部預設設定', restoreSource: '還原此來源預設設定', restoreHint: '一次性維護，執行前自動備份；還原後外掛及全部來源關閉，歷史與黑名單保留。', restoreConfirm: '確認還原全部預設設定？目前設定會先備份，未儲存的修改將被放棄。此操作立即執行，歷史、黑名單和既有訂閱不受影響。', restoreSourceConfirm: '確認還原此來源預設設定？該來源將關閉，其他來源不變；儲存後生效。', sourceRecoveryHint: '僅暫停此來源，原設定已保留。可單獨還原後重新設定，其他來源可繼續使用及儲存。', confirmRestore: '確認還原', cancelRestore: '取消', restoreFailed: '還原失敗，請稍後重試',
     secRunning: '執行', secSubscription: '訂閱', secOneTime: '一次性維護',
     'g.enabled.label': '啟用外掛', 'g.enabled.hint': '總開關，關閉後所有定時任務停止',
     sourceNotify: '執行通知', sourceNotifyHint: '傳送此來源的執行結果或失敗通知，不影響其他來源',
@@ -443,7 +472,7 @@ const MSG = {
     testConn: '連通性測試', testOk: '連通正常', testFail: '連通失敗：', throttled: '操作過於頻繁，請稍後再試',
     overview: '概覽', ovSources: '啟用來源', ovNotify: '通知來源', ovExistOk: '已存在仍訂閱', on: '開', off: '關',
     navHistory: '訂閱歷史', navBlacklist: '黑名單', navManage: '訂閱管理', navConfig: '訂閱設定',
-    viewHistory: '檢視訂閱歷史', unsaved: '{n} 項未儲存', providersError: '取得來源列表失敗，已按現有設定渲染：',
+    viewHistory: '檢視訂閱歷史', unsaved: '{n} 項未儲存', providersError: '取得來源列表失敗：',
     help: '外掛說明', collapse: '收合側欄', expand: '展開側欄', runtimeTitle: '執行概覽', back: '返回',
     processing: '處理中', procN: '已處理 {n} 筆',
     rtTotal: '累計處理', rtLoading: '統計載入中…', rtEmpty: '暫無執行記錄',
@@ -452,6 +481,7 @@ const MSG = {
   'en-US': {
     plugin: 'Plugin', title: 'Auto Subscribe', changes: '{n} changed', save: 'Save', close: 'Close',
     settingsGroups: 'Settings', mediaSources: 'Media', musicSources: 'Music', globalHeading: 'Global settings', globalDesc: 'Master switch and subscription owner; applies to all sources',
+    restoreAll: 'Restore all defaults', restoreSource: 'Restore source defaults', restoreHint: 'One-time maintenance with an automatic backup. Disables the plugin and all sources; keeps history and blacklist.', restoreConfirm: 'Restore all defaults now? Current settings will be backed up and unsaved edits discarded. History, blacklist and existing subscriptions are kept.', restoreSourceConfirm: 'Restore this source and disable it? Other sources stay unchanged. Save settings to apply.', sourceRecoveryHint: 'Only this source is paused. Its original settings are retained. Restore this source to configure it again; other sources can still run and be saved.', confirmRestore: 'Restore', cancelRestore: 'Cancel', restoreFailed: 'Restore failed. Please retry.',
     secRunning: 'Running', secSubscription: 'Subscription', secOneTime: 'One-time',
     'g.enabled.label': 'Enable plugin', 'g.enabled.hint': 'Master switch; off stops all scheduled tasks',
     sourceNotify: 'Run notifications', sourceNotifyHint: 'Send results or failures for this source independently',
@@ -470,7 +500,7 @@ const MSG = {
     testConn: 'Test connection', testOk: 'Connected', testFail: 'Connection failed: ', throttled: 'Too frequent, please retry later',
     overview: 'Overview', ovSources: 'Enabled sources', ovNotify: 'Sources with notifications', ovExistOk: 'Subscribe if exists', on: 'On', off: 'Off',
     navHistory: 'History', navBlacklist: 'Blacklist', navManage: 'Manage', navConfig: 'Settings',
-    viewHistory: 'View history', unsaved: '{n} unsaved', providersError: 'Failed to load sources; rendered from current config: ',
+    viewHistory: 'View history', unsaved: '{n} unsaved', providersError: 'Failed to load sources: ',
     help: 'Plugin help', collapse: 'Collapse', expand: 'Expand', runtimeTitle: 'Run overview', back: 'Back',
     processing: 'Processing', procN: '{n} processed',
     rtTotal: 'Processed', rtLoading: 'Loading stats…', rtEmpty: 'No runs yet',
@@ -510,6 +540,11 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const configurationBlocked = ref(true)
+const providerIssues = reactive({})
+const preservedProviders = reactive({})
+const resetTarget = ref('')
+const resetBusy = ref(false)
+const resetError = ref('')
 let configLoadPromise = null
 let configurationLoaded = false
 const providerSpecs = ref([])
@@ -615,7 +650,7 @@ function deepClone(obj) { try { return JSON.parse(JSON.stringify(obj ?? {})) } c
 const initClone = deepClone(props.initialConfig)
 const config = reactive({
   global: Object.fromEntries(Object.entries(GLOBAL_DEFAULTS).map(([key, value]) => [key, initClone.global?.[key] ?? value])),
-  providers: initClone.providers && typeof initClone.providers === 'object' ? initClone.providers : {},
+  providers: initClone.providers && typeof initClone.providers === 'object' && !Array.isArray(initClone.providers) ? initClone.providers : {},
 })
 
 const globalSections = computed(() => GLOBAL_SECTIONS.map(s => ({
@@ -649,13 +684,18 @@ const notifyingCount = computed(() => providerSpecs.value.filter(s => config.pro
 
 const changedCount = computed(() => {
   if (!snapshot.value) return 0
-  const cur = flatten(config)
+  const cur = flatten(configurationPayload())
   const base = snapshot.value
   let n = 0
   const keys = new Set([...Object.keys(cur), ...Object.keys(base)])
   keys.forEach(k => { if (cur[k] !== base[k]) n++ })
   return n
 })
+function configurationPayload() {
+  const payload = deepClone(config)
+  for (const [pid, original] of Object.entries(preservedProviders)) payload.providers[pid] = original === null ? null : deepClone(original)
+  return payload
+}
 function flatten(obj, prefix = '', out = {}) {
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) { out[prefix] = JSON.stringify(obj); return out }
   for (const [k, v] of Object.entries(obj)) flatten(v, prefix ? `${prefix}.${k}` : k, out)
@@ -667,7 +707,16 @@ function isProviderEnabled(pid) { return !!(config.providers[pid] && config.prov
 
 function ensureProviderConfig(spec) {
   const pid = spec.provider_id
-  const existed = !!config.providers[pid]
+  const existed = pid in config.providers
+  const raw = config.providers[pid]
+  const ruleField = (spec.options_schema || []).find(f => f.kind === 'rule-list')
+  if (existed && (providerIssues[pid] || !raw || typeof raw !== 'object' || Array.isArray(raw) ||
+      (ruleField && !Array.isArray(raw.options?.[ruleField.key])))) {
+    if (!(pid in preservedProviders)) preservedProviders[pid] = raw === null ? null : deepClone(raw)
+    providerIssues[pid] ||= `${spec.provider_name || pid}：配置异常，原配置已保留，仅暂停此来源`
+    config.providers[pid] = defaultProvider(spec)
+    return
+  }
   if (!config.providers[pid] || typeof config.providers[pid] !== 'object') config.providers[pid] = {}
   const pc = config.providers[pid]
   if (typeof pc.enabled !== 'boolean') pc.enabled = false
@@ -675,12 +724,44 @@ function ensureProviderConfig(spec) {
   if (!pc.cron) pc.cron = spec.default_cron || ''
   if (!pc.options || typeof pc.options !== 'object') pc.options = {}
   if (!pc.filters || typeof pc.filters !== 'object') pc.filters = {}
-  const ruleField = (spec.options_schema || []).find(f => f.kind === 'rule-list')
-  if (existed && ruleField && pc.options[ruleField.key] === undefined) {
-    throw new Error(`${spec.provider_name || pid}：旧配置尚未完成自动迁移，请检查后端升级状态`)
-  }
   pc.options = { ...pc.options, ...Object.fromEntries((spec.options_schema || []).map(f => [f.key, pc.options[f.key] === undefined ? deepClone(f.default) : pc.options[f.key]])) }
   pc.filters = { ...pc.filters, ...Object.fromEntries((spec.filters_schema || []).map(f => [f.key, pc.filters[f.key] === undefined ? deepClone(f.default) : pc.filters[f.key]])) }
+}
+
+function defaultProvider(spec) {
+  return { enabled: false, notify: false, cron: spec.default_cron || '',
+    options: Object.fromEntries((spec.options_schema || []).map(f => [f.key, deepClone(f.default)])),
+    filters: Object.fromEntries((spec.filters_schema || []).map(f => [f.key, deepClone(f.default)])) }
+}
+
+async function restoreDefaults() {
+  resetBusy.value = true
+  resetError.value = ''
+  try {
+    if (resetTarget.value !== 'all') {
+      const spec = providerSpecs.value.find(s => s.provider_id === resetTarget.value)
+      if (!spec) throw new Error(t('providersError'))
+      config.providers[spec.provider_id] = defaultProvider(spec)
+      delete preservedProviders[spec.provider_id]
+      delete providerIssues[spec.provider_id]
+    } else {
+      if (typeof props.api?.post !== 'function') throw new Error(t('apiUnavailable'))
+      const response = await props.api.post(`${PLUGIN}/config/reset`, { confirmed: true })
+      if (response?.code !== 0 || !response?.config) throw new Error(response?.message || t('restoreFailed'))
+      config.global = deepClone(response.config.global || GLOBAL_DEFAULTS)
+      config.providers = deepClone(response.config.providers || {})
+      for (const key of Object.keys(providerIssues)) delete providerIssues[key]
+      for (const key of Object.keys(preservedProviders)) delete preservedProviders[key]
+      providerSpecs.value.forEach(ensureProviderConfig)
+      configurationBlocked.value = false
+      configurationLoaded = true
+      configLoadPromise = Promise.resolve()
+      snapshot.value = flatten(configurationPayload())
+      error.value = ''
+    }
+    resetTarget.value = ''
+  } catch (e) { resetError.value = e?.message || String(e) }
+  finally { resetBusy.value = false }
 }
 
 async function loadProviders() {
@@ -688,30 +769,35 @@ async function loadProviders() {
   error.value = ''
   try {
     if (!props.api || typeof props.api.get !== 'function') throw new Error(t('apiUnavailable'))
+    // 来源元数据不依赖配置请求，配置损坏也必须能显示完整来源导航与恢复入口。
+    const res = await props.api.get(`${PLUGIN}/providers?lang=${encodeURIComponent(locale.value)}`)
+    providerSpecs.value = Array.isArray(res) ? res : (Array.isArray(res?.providers) ? res.providers : [])
+    if (!providerSpecs.value.length) throw new Error(t('providersError'))
     // 宿主传入的 initialConfig 可能早于插件启动迁移；只在首次载入时读取后端的已升级配置。
     // 语言切换复用该请求，避免覆盖用户尚未保存的编辑。
     if (!configLoadPromise) configLoadPromise = (async () => {
       const response = await props.api.get(`${PLUGIN}/config`)
-      if (response?.code || !response?.config || typeof response.config !== 'object') {
+      if (!response?.config || typeof response.config !== 'object' || Array.isArray(response.config)) {
         throw new Error(response?.message || '无法读取升级后的配置，已阻止保存')
       }
       config.global = { ...config.global, ...deepClone(response.config.global || {}) }
-      config.providers = deepClone(response.config.providers || {})
+      const sources = deepClone(response.config.providers || {})
+      if (typeof sources !== 'object' || Array.isArray(sources)) throw new Error('来源配置格式异常，可还原全部默认配置')
+      config.providers = sources
+      Object.assign(providerIssues, response.provider_errors || {})
+      if (response.warning || response.code) error.value = response.warning || response.message
       configurationLoaded = true
     })()
     await configLoadPromise
-    const res = await props.api.get(`${PLUGIN}/providers?lang=${encodeURIComponent(locale.value)}`)
-    if (Array.isArray(res)) providerSpecs.value = res
-    else if (res && Array.isArray(res.providers)) providerSpecs.value = res.providers
-    else providerSpecs.value = []
-    if (!providerSpecs.value.length) throw new Error(t('providersError'))
     providerSpecs.value.forEach(ensureProviderConfig)
     configurationBlocked.value = false
-    if (!snapshot.value) snapshot.value = flatten(config)
+    if (!snapshot.value) snapshot.value = flatten(configurationPayload())
   } catch (e) {
-    error.value = t('providersError') + (e?.message || e)
+    error.value = e?.message || String(e)
     configurationBlocked.value = true
     if (!configurationLoaded) configLoadPromise = null
+    // 初始快照只供显示；读取配置失败时禁止普通保存，但仍可调用维护恢复接口。
+    providerSpecs.value.forEach(ensureProviderConfig)
   }
   loading.value = false
 }
@@ -810,8 +896,9 @@ function saveConfig() {
   }
   saving.value = true
   try {
-    emit('save', deepClone(config))
-    snapshot.value = flatten(config)
+    const payload = configurationPayload()
+    emit('save', payload)
+    snapshot.value = flatten(payload)
   } finally {
     saving.value = false
   }

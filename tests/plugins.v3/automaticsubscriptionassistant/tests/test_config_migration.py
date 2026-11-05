@@ -285,11 +285,10 @@ def test_new_rules_including_explicit_empty_remain_untouched():
         ("douban", {"ranks": ["unknown"]}, {}),
         ("douban", {"ranks": ["tv-hot"], "unknown": 1}, {}),
         ("douban", {"ranks": ["tv-hot"]}, {"future_filter": 1}),
-        ("douban", {"ranks": ["tv-hot"]}, {"vote": 11}),
         ("mikan", {"year": -1, "season": "夏"}, {}),
         ("maoyan", {"web_platform_map": {"tx": ["netmovie"]}}, {}),
         ("netflix", {"country_selections": {"unknown": ["TV"]}}, {}),
-        ("spotify", {"charts": ["ALBUM_GLOBAL_WEEKLY"], "limit": 0}, {}),
+        ("spotify", {"charts": ["ALBUM_GLOBAL_WEEKLY"], "limit": -1}, {}),
     ],
 )
 def test_non_equivalent_config_rejected_without_mutating_original(
@@ -353,7 +352,7 @@ def test_startup_migrates_persists_and_exposes_upgraded_config(
     assert len(writes) == 1
 
 
-@pytest.mark.parametrize("failure", ["backup", "write", "readback", "invalid"])
+@pytest.mark.parametrize("failure", ["backup", "write", "readback"])
 def test_startup_migration_failure_stops_jobs_and_oneshots(
     database, monkeypatch, tmp_path, failure
 ):
@@ -376,7 +375,8 @@ def test_startup_migration_failure_stops_jobs_and_oneshots(
     plugin.init_plugin(original)
     assert not plugin._database_ready and plugin._event.is_set()
     assert not plugin.get_state() and plugin.get_service() == []
-    assert plugin.api_get_config()["code"] == 1
+    assert plugin.api_get_config()["code"] == 0
+    assert plugin.api_get_config()["warning"]
     plugin._schedule_once.assert_not_called()
     plugin._reset_oneshot_flags.assert_not_called()
     if failure in {"backup", "invalid"}:
@@ -504,3 +504,151 @@ def test_real_sdk_configuration_storage_migrates_old_release_defaults(
     assert len(list((tmp_path / "config-backups").glob("*.json"))) == 1
     plugin._plugininstance.delete("ASAConfigMigrationTest")
     # 测试引导使用隔离的宿主数据库，不访问运行实例的配置。
+
+
+def _stored_plugin(database, monkeypatch, tmp_path, original):
+    plugin, _ = bare_plugin(database, monkeypatch, tmp_path)
+    saved = deepcopy(original)
+
+    def persist(value):
+        saved.clear()
+        saved.update(deepcopy(value))
+        return True
+
+    plugin.get_config = lambda: deepcopy(saved)
+    plugin.update_config = MagicMock(side_effect=persist)
+    plugin._refresh_jobs = MagicMock()
+    plugin.init_plugin(deepcopy(saved))
+    return plugin, saved
+
+
+def test_invalid_source_does_not_block_other_sources_or_overview(
+    database, monkeypatch, tmp_path
+):
+    original = {
+        "global": {"enabled": True},
+        "providers": {
+            "douban": {"enabled": True, "options": {"ranks": ["unknown"]}},
+            "netflix": None,
+            "mikan": {
+                "enabled": True,
+                "cron": "0 8 * * *",
+                "options": {"year": 0, "season": "当前"},
+            },
+        },
+    }
+    plugin, saved = _stored_plugin(database, monkeypatch, tmp_path, original)
+    assert plugin._database_ready and not plugin._event.is_set()
+    assert set(plugin._configuration_errors) == {"douban", "netflix"}
+    assert plugin.get_state()
+    assert [job["func_kwargs"]["provider_id"] for job in plugin.get_service()] == [
+        "mikan"
+    ]
+    assert len(plugin.api_providers()["providers"]) == 10
+    assert len(plugin.api_status()["providers"]) == 10
+    assert plugin.api_get_config()["provider_errors"] == plugin._configuration_errors
+    assert plugin.api_run({"provider_id": "douban"})["code"] == 1
+    assert saved["providers"]["douban"] == original["providers"]["douban"]
+    assert saved["providers"]["netflix"] is None
+    assert (
+        json.loads(next((tmp_path / "config-backups").glob("*.json")).read_text())
+        == original
+    )
+    # 可以保存正常来源的修改，异常原件不会被默认值覆盖。
+    request = deepcopy(saved)
+    request["providers"]["mikan"]["cron"] = "0 9 * * *"
+    assert plugin.api_save_config(request)["code"] == 0
+    assert saved["providers"]["mikan"]["cron"] == "0 9 * * *"
+    assert saved["providers"]["netflix"] is None
+    assert saved["providers"]["douban"] == original["providers"]["douban"]
+
+
+def test_restore_all_defaults_is_confirmed_backed_up_and_keeps_data(
+    database, monkeypatch, tmp_path
+):
+    from app.plugins.automaticsubscriptionassistant.schemas import HistoryRecord
+
+    original = {
+        "global": {"enabled": True, "username": "old-user"},
+        "providers": {
+            "douban": {"enabled": True, "options": {"rules": [{"chart": "unknown"}]}}
+        },
+    }
+    plugin, saved = _stored_plugin(database, monkeypatch, tmp_path, original)
+    history = plugin._history_store()
+    history.record(
+        HistoryRecord(
+            unique="kept", provider="douban", title="Keep me", status="subscribed"
+        )
+    )
+    item = plugin.blacklist_store().add({"title": "Keep blacklist", "type": "电影"})
+    writes = plugin.update_config.call_count
+    assert plugin.api_reset_config({})["code"] == 1
+    assert plugin.update_config.call_count == writes
+    result = plugin.api_reset_config({"confirmed": True})
+    assert result["code"] == 0
+    assert saved["global"]["enabled"] is False
+    assert saved["global"]["clear"] is False and saved["global"]["onlyonce"] is False
+    assert len(saved["providers"]) == 10
+    assert all(
+        not p["enabled"] and not p["notify"] for p in saved["providers"].values()
+    )
+    assert plugin._configuration_errors == {} and plugin.get_service() == []
+    assert history.get("kept")["title"] == "Keep me"
+    assert plugin.blacklist_store().list()[0]["id"] == item["id"]
+    assert any(
+        json.loads(path.read_text()) == original
+        for path in (tmp_path / "config-backups").glob("*.json")
+    )
+    plugin.init_plugin(saved)
+    assert history.get("kept")["title"] == "Keep me"
+
+
+def test_restore_backup_failure_never_writes_or_stops_working_plugin(
+    database, monkeypatch, tmp_path
+):
+    import app.plugins.automaticsubscriptionassistant.api.configuration as api
+
+    plugin, saved = _stored_plugin(
+        database, monkeypatch, tmp_path, {"global": {"enabled": True}}
+    )
+    before = deepcopy(saved)
+    writes = plugin.update_config.call_count
+    monkeypatch.setattr(
+        api, "backup_config", MagicMock(side_effect=OSError("disk full"))
+    )
+    result = plugin.api_reset_config({"confirmed": True})
+    assert result["code"] == 1 and "disk full" in result["message"]
+    assert saved == before and plugin.update_config.call_count == writes
+    assert plugin._database_ready
+
+
+def test_large_netflix_legacy_limit_migrates_without_truncating_setting():
+    options = convert(
+        "netflix",
+        {
+            "global": True,
+            "global_media_types": ["TV (English)"],
+            "country_selections": {"JP": ["TV"]},
+            "limit": 10000,
+        },
+    )
+    assert all(r["limit"] == 10000 for r in options["rules"])
+
+
+def test_restore_write_failure_retains_original_and_leaves_tasks_stopped(
+    database, monkeypatch, tmp_path
+):
+    plugin, saved = _stored_plugin(
+        database, monkeypatch, tmp_path, {"global": {"enabled": True}}
+    )
+    before = deepcopy(saved)
+    plugin.update_config = MagicMock(return_value=False)
+    result = plugin.api_reset_config({"confirmed": True})
+    assert result["code"] == 1 and "写入" in result["message"]
+    assert saved == before
+    assert not plugin._database_ready and plugin.get_service() == []
+    assert (
+        json.loads(next((tmp_path / "config-backups").glob("*.json")).read_text())
+        == before
+    )

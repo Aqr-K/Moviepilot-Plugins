@@ -75,7 +75,7 @@ class AutomaticSubscriptionAssistant(
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.4.1"
+    plugin_version = "3.4.2"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -93,6 +93,7 @@ class AutomaticSubscriptionAssistant(
         self._database_ready = False
         self._database_error = "数据库尚未初始化"
         self._configuration_error = ""
+        self._configuration_errors = {}
         self._enabled: bool = False
         self._config: Dict[str, Any] = {}
         self._settings: PluginSettings = PluginSettings({})
@@ -201,7 +202,9 @@ class AutomaticSubscriptionAssistant(
         if not self._database_ready or not gcfg.enabled:
             return False
         return any(
-            self._provider_config(provider).enabled for provider in self._providers
+            provider.provider_id not in getattr(self, "_configuration_errors", {})
+            and self._provider_config(provider).enabled
+            for provider in self._providers
         )
 
     @staticmethod
@@ -280,6 +283,8 @@ class AutomaticSubscriptionAssistant(
             return services
         for provider in self._providers:
             spec = provider.get_spec()
+            if spec.provider_id in getattr(self, "_configuration_errors", {}):
+                continue
             pconf = ProviderConfig(self._settings.provider_raw(spec.provider_id), spec)
             if not pconf.enabled:
                 continue
@@ -343,6 +348,9 @@ class AutomaticSubscriptionAssistant(
         """
         if not self._database_ready or self._event.is_set():
             logger.warning(f"{self.plugin_name}：数据库未就绪或插件已停止，本次不运行")
+            return
+        if provider_id in getattr(self, "_configuration_errors", {}):
+            logger.warning(f"{self.plugin_name}：{provider_id} 配置异常，仅暂停此来源")
             return
         provider = registry.get(provider_id)
         if provider is None:
@@ -413,6 +421,8 @@ class AutomaticSubscriptionAssistant(
         for provider in self._providers:
             if event is not None and event.is_set():
                 break
+            if provider.provider_id in getattr(self, "_configuration_errors", {}):
+                continue
             if not self._provider_config(provider).enabled:
                 continue
             self.run_provider(provider.provider_id, subscribed_index=subscribed_index)

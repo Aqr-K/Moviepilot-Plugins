@@ -56,12 +56,10 @@ def test_rule_contract_defaults_serialization_and_empty_disables(pid, monkeypatc
         [{"on": "false"}],
         [{"sort": "BOGUS"}],
         [{"formats": []}],
-        [{"limit": 0}],
-        [{"limit": 501}],
+        [{"limit": -1}],
         [{"limit": True}],
         [{"limit": "nan"}],
         [{"limit": 1.5}],
-        [{"time": "fixed", "year": 1800}],
         [{"statuses": ["invalid"]}],
         [{"name": "x" * 81}],
     ],
@@ -365,7 +363,7 @@ def test_invalid_api_rules_are_rejected_before_configuration_write():
     result = api.api_save_config(
         {
             "providers": {
-                "anilist": {"enabled": True, "options": {"rules": [{"limit": 0}]}}
+                "anilist": {"enabled": True, "options": {"rules": [{"limit": -1}]}}
             }
         }
     )
@@ -503,3 +501,22 @@ def test_new_rule_configuration_survives_save_and_reload_without_matrix_fields()
         ]["id"]
         == "rule-http-test"
     )
+
+
+@pytest.mark.parametrize('pid', RULE_PROVIDERS)
+def test_all_sources_accept_wide_numeric_ranges_and_zero_limit_skips_fetch(pid, monkeypatch):
+    provider = registry.get(pid)
+    field = provider.get_spec().options_schema[0]
+    entry = deepcopy(field.default[0])
+    for spec in field.fields:
+        if spec.kind in {'number', 'float'}:
+            assert spec.maximum is None
+            if spec.key not in {'year'}:
+                entry[spec.key] = 100000
+    parsed = provider.rules({'rules': [entry]})
+    assert parsed
+    if any(f.key == 'limit' for f in field.fields):
+        entry['limit'] = 0
+        monkeypatch.setattr(provider, '_fetch_options', MagicMock(side_effect=AssertionError('must not fetch')))
+        assert not provider.has_listening({'rules': [entry]})
+        assert list(provider.fetch({'rules': [entry]}, _make_ctx())) == []

@@ -202,7 +202,7 @@ class RuleRankProvider(RankProvider):
 
             if not settings.SUBSCRIBE_STATISTIC_SHARE:
                 return False
-        return any(r["on"] for r in self.rules(options))
+        return any(r["on"] and r.get("limit", 1) > 0 for r in self.rules(options))
 
     def fetch(self, options, context):
         options = options or {}
@@ -233,7 +233,7 @@ class RuleRankProvider(RankProvider):
                 yield from self._fetch_options(values, context)
 
         for entry in self.rules(options):
-            if not entry["on"]:
+            if not entry["on"] or entry.get("limit", 1) == 0:
                 continue
             values = self._rule_options(entry, options)
             filters = {

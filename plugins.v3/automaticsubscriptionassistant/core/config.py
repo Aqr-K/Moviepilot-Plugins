@@ -13,10 +13,11 @@
 ``TypedConfigAccess`` 的转换器实现对齐参考插件 subscribeassistantenhanced/shared/config.py，
 避免各处重复且行为一致。``build_defaults`` 由 ProviderSpec 反射生成完整默认，杜绝表单/配置漂移。
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..schemas import FieldSpec, ProviderSpec
@@ -32,7 +33,7 @@ class TypedConfigAccess:
     """原始 dict -> 类型安全访问器。缺失 key 一律回退默认值。"""
 
     def __init__(self, raw: dict):
-        self._raw = raw or {}
+        self._raw = raw if isinstance(raw, dict) else {}
 
     def get_bool(self, key: str, default: bool = False) -> bool:
         """布尔解析：bool 直返；字符串支持 true/on/yes/1。"""
@@ -82,18 +83,24 @@ class TypedConfigAccess:
         return list(default or [])
 
 
-def _read_field(access: TypedConfigAccess, spec_field: "FieldSpec") -> Any:
+def _read_field(access: TypedConfigAccess, spec_field: FieldSpec) -> Any:
     """按 FieldSpec.kind 用对应转换器读取值，缺失回退 spec 默认。"""
     kind = spec_field.kind
     default = spec_field.default
     if kind == "switch":
         return access.get_bool(spec_field.key, bool(default))
     if kind == "number":
-        return access.get_int(spec_field.key, int(default) if default not in (None, "") else 0)
+        return access.get_int(
+            spec_field.key, int(default) if default not in (None, "") else 0
+        )
     if kind == "float":
-        return access.get_float(spec_field.key, float(default) if default not in (None, "") else 0.0)
+        return access.get_float(
+            spec_field.key, float(default) if default not in (None, "") else 0.0
+        )
     if kind == "multi-select":
-        return access.get_list(spec_field.key, default if isinstance(default, list) else [])
+        return access.get_list(
+            spec_field.key, default if isinstance(default, list) else []
+        )
     if kind == "rule-list":
         return deepcopy(access._raw.get(spec_field.key, default))
     # text / select / cron / textarea / hidden 等按字符串处理
@@ -137,15 +144,21 @@ class GlobalConfig(TypedConfigAccess):
 class ProviderConfig(TypedConfigAccess):
     """单个来源配置包装：``{enabled, cron, options, filters}``。"""
 
-    def __init__(self, raw: dict, spec: "ProviderSpec"):
+    def __init__(self, raw: dict, spec: ProviderSpec):
         super().__init__(raw)
         self.spec = spec
-        self.options: dict = dict(self._raw.get("options") or {})
-        self.filters: dict = dict(self._raw.get("filters") or {})
+        options = self._raw.get("options")
+        filters = self._raw.get("filters")
+        self.options: dict = dict(options) if isinstance(options, dict) else {}
+        self.filters: dict = dict(filters) if isinstance(filters, dict) else {}
         self._options_access = TypedConfigAccess(self.options)
         self._filters_access = TypedConfigAccess(self.filters)
-        self._options_specs: Dict[str, "FieldSpec"] = {f.key: f for f in (spec.options_schema or [])}
-        self._filters_specs: Dict[str, "FieldSpec"] = {f.key: f for f in (spec.filters_schema or [])}
+        self._options_specs: dict[str, FieldSpec] = {
+            f.key: f for f in (spec.options_schema or [])
+        }
+        self._filters_specs: dict[str, FieldSpec] = {
+            f.key: f for f in (spec.filters_schema or [])
+        }
 
     @property
     def enabled(self) -> bool:
@@ -181,7 +194,7 @@ class PluginSettings:
     """顶层配置访问器：拆分 global 与各 provider 的原始 dict。"""
 
     def __init__(self, raw: dict):
-        self._raw = raw or {}
+        self._raw = raw if isinstance(raw, dict) else {}
 
     @property
     def global_config(self) -> GlobalConfig:
@@ -191,12 +204,15 @@ class PluginSettings:
     def provider_raw(self, provider_id: str) -> dict:
         """返回指定来源的原始配置 dict（不存在则空 dict）。"""
         providers = self._raw.get("providers") or {}
-        return providers.get(provider_id) or {}
+        if not isinstance(providers, dict):
+            return {}
+        raw = providers.get(provider_id)
+        return raw if isinstance(raw, dict) else {}
 
 
-def build_defaults(specs: List["ProviderSpec"]) -> dict:
+def build_defaults(specs: list[ProviderSpec]) -> dict:
     """由 ProviderSpec 列表反射出完整默认配置，供 get_form 第二项使用。"""
-    defaults: Dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "global": {
             "enabled": False,
             "username": DEFAULT_USERNAME,

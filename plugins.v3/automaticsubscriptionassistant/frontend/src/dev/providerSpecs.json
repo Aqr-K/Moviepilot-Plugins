@@ -107,8 +107,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 0,
-            "maximum": 10
+            "minimum": 0
           },
           {
             "key": "min_year",
@@ -118,8 +117,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 0,
-            "maximum": 2200
+            "minimum": 0
           },
           {
             "key": "media_type",
@@ -321,10 +319,9 @@
             "kind": "number",
             "default": 10,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 100
+            "minimum": 0
           },
           {
             "key": "min_year",
@@ -334,8 +331,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 0,
-            "maximum": 2200
+            "minimum": 0
           },
           {
             "key": "media_type",
@@ -612,10 +608,9 @@
             "kind": "number",
             "default": 30,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 500
+            "minimum": 0
           },
           {
             "key": "min_rating",
@@ -625,8 +620,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 0,
-            "maximum": 10
+            "minimum": 0
           },
           {
             "key": "popularity",
@@ -636,8 +630,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 0,
-            "maximum": 100000000
+            "minimum": 0
           }
         ]
       }
@@ -709,14 +702,13 @@
           },
           {
             "key": "year",
-            "label": "年份",
+            "label": "年份（0=当前年）",
             "kind": "number",
             "default": 2026,
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 2000,
-            "maximum": 2200,
+            "minimum": 0,
             "visible_when": {
               "time": [
                 "fixed"
@@ -729,6 +721,10 @@
             "kind": "select",
             "default": "冬",
             "options": [
+              {
+                "value": "当前",
+                "title": "当前季度（自动）"
+              },
               {
                 "value": "冬",
                 "title": "冬季"
@@ -763,8 +759,7 @@
             "options": null,
             "hint": "",
             "advanced": true,
-            "minimum": 0,
-            "maximum": 2200
+            "minimum": 0
           }
         ]
       },
@@ -860,379 +855,379 @@
             "options": [
               {
                 "value": "AE",
-                "title": "阿联酋"
+                "title": "United Arab Emirates"
               },
               {
                 "value": "AR",
-                "title": "阿根廷"
+                "title": "Argentina"
               },
               {
                 "value": "AT",
-                "title": "奥地利"
+                "title": "Austria"
               },
               {
                 "value": "AU",
-                "title": "澳大利亚"
+                "title": "Australia"
               },
               {
                 "value": "BD",
-                "title": "孟加拉国"
+                "title": "Bangladesh"
               },
               {
                 "value": "BE",
-                "title": "比利时"
+                "title": "Belgium"
               },
               {
                 "value": "BG",
-                "title": "保加利亚"
+                "title": "Bulgaria"
               },
               {
                 "value": "BH",
-                "title": "巴林"
+                "title": "Bahrain"
               },
               {
                 "value": "BO",
-                "title": "玻利维亚"
+                "title": "Bolivia"
               },
               {
                 "value": "BR",
-                "title": "巴西"
+                "title": "Brazil"
               },
               {
                 "value": "BS",
-                "title": "巴哈马"
+                "title": "Bahamas"
               },
               {
                 "value": "CA",
-                "title": "加拿大"
+                "title": "Canada"
               },
               {
                 "value": "CH",
-                "title": "瑞士"
+                "title": "Switzerland"
               },
               {
                 "value": "CL",
-                "title": "智利"
+                "title": "Chile"
               },
               {
                 "value": "CO",
-                "title": "哥伦比亚"
+                "title": "Colombia"
               },
               {
                 "value": "CR",
-                "title": "哥斯达黎加"
+                "title": "Costa Rica"
               },
               {
                 "value": "CY",
-                "title": "塞浦路斯"
+                "title": "Cyprus"
               },
               {
                 "value": "CZ",
-                "title": "捷克"
+                "title": "Czech Republic"
               },
               {
                 "value": "DE",
-                "title": "德国"
+                "title": "Germany"
               },
               {
                 "value": "DK",
-                "title": "丹麦"
+                "title": "Denmark"
               },
               {
                 "value": "DO",
-                "title": "多米尼加"
+                "title": "Dominican Republic"
               },
               {
                 "value": "EC",
-                "title": "厄瓜多尔"
+                "title": "Ecuador"
               },
               {
                 "value": "EE",
-                "title": "爱沙尼亚"
+                "title": "Estonia"
               },
               {
                 "value": "EG",
-                "title": "埃及"
+                "title": "Egypt"
               },
               {
                 "value": "ES",
-                "title": "西班牙"
+                "title": "Spain"
               },
               {
                 "value": "FI",
-                "title": "芬兰"
+                "title": "Finland"
               },
               {
                 "value": "FR",
-                "title": "法国"
+                "title": "France"
               },
               {
                 "value": "GB",
-                "title": "英国"
+                "title": "United Kingdom"
               },
               {
                 "value": "GP",
-                "title": "瓜德罗普"
+                "title": "Guadeloupe"
               },
               {
                 "value": "GR",
-                "title": "希腊"
+                "title": "Greece"
               },
               {
                 "value": "GT",
-                "title": "危地马拉"
+                "title": "Guatemala"
               },
               {
                 "value": "HK",
-                "title": "香港"
+                "title": "Hong Kong"
               },
               {
                 "value": "HN",
-                "title": "洪都拉斯"
+                "title": "Honduras"
               },
               {
                 "value": "HR",
-                "title": "克罗地亚"
+                "title": "Croatia"
               },
               {
                 "value": "HU",
-                "title": "匈牙利"
+                "title": "Hungary"
               },
               {
                 "value": "ID",
-                "title": "印度尼西亚"
+                "title": "Indonesia"
               },
               {
                 "value": "IE",
-                "title": "爱尔兰"
+                "title": "Ireland"
               },
               {
                 "value": "IL",
-                "title": "以色列"
+                "title": "Israel"
               },
               {
                 "value": "IN",
-                "title": "印度"
+                "title": "India"
               },
               {
                 "value": "IS",
-                "title": "冰岛"
+                "title": "Iceland"
               },
               {
                 "value": "IT",
-                "title": "意大利"
+                "title": "Italy"
               },
               {
                 "value": "JM",
-                "title": "牙买加"
+                "title": "Jamaica"
               },
               {
                 "value": "JO",
-                "title": "约旦"
+                "title": "Jordan"
               },
               {
                 "value": "JP",
-                "title": "日本"
+                "title": "Japan"
               },
               {
                 "value": "KE",
-                "title": "肯尼亚"
+                "title": "Kenya"
               },
               {
                 "value": "KR",
-                "title": "韩国"
+                "title": "South Korea"
               },
               {
                 "value": "KW",
-                "title": "科威特"
+                "title": "Kuwait"
               },
               {
                 "value": "LB",
-                "title": "黎巴嫩"
+                "title": "Lebanon"
               },
               {
                 "value": "LK",
-                "title": "斯里兰卡"
+                "title": "Sri Lanka"
               },
               {
                 "value": "LT",
-                "title": "立陶宛"
+                "title": "Lithuania"
               },
               {
                 "value": "LU",
-                "title": "卢森堡"
+                "title": "Luxembourg"
               },
               {
                 "value": "LV",
-                "title": "拉脱维亚"
+                "title": "Latvia"
               },
               {
                 "value": "MA",
-                "title": "摩洛哥"
+                "title": "Morocco"
               },
               {
                 "value": "MQ",
-                "title": "马提尼克"
+                "title": "Martinique"
               },
               {
                 "value": "MT",
-                "title": "马耳他"
+                "title": "Malta"
               },
               {
                 "value": "MU",
-                "title": "毛里求斯"
+                "title": "Mauritius"
               },
               {
                 "value": "MV",
-                "title": "马尔代夫"
+                "title": "Maldives"
               },
               {
                 "value": "MX",
-                "title": "墨西哥"
+                "title": "Mexico"
               },
               {
                 "value": "MY",
-                "title": "马来西亚"
+                "title": "Malaysia"
               },
               {
                 "value": "NC",
-                "title": "新喀里多尼亚"
+                "title": "New Caledonia"
               },
               {
                 "value": "NG",
-                "title": "尼日利亚"
+                "title": "Nigeria"
               },
               {
                 "value": "NI",
-                "title": "尼加拉瓜"
+                "title": "Nicaragua"
               },
               {
                 "value": "NL",
-                "title": "荷兰"
+                "title": "Netherlands"
               },
               {
                 "value": "NO",
-                "title": "挪威"
+                "title": "Norway"
               },
               {
                 "value": "NZ",
-                "title": "新西兰"
+                "title": "New Zealand"
               },
               {
                 "value": "OM",
-                "title": "阿曼"
+                "title": "Oman"
               },
               {
                 "value": "PA",
-                "title": "巴拿马"
+                "title": "Panama"
               },
               {
                 "value": "PE",
-                "title": "秘鲁"
+                "title": "Peru"
               },
               {
                 "value": "PH",
-                "title": "菲律宾"
+                "title": "Philippines"
               },
               {
                 "value": "PK",
-                "title": "巴基斯坦"
+                "title": "Pakistan"
               },
               {
                 "value": "PL",
-                "title": "波兰"
+                "title": "Poland"
               },
               {
                 "value": "PT",
-                "title": "葡萄牙"
+                "title": "Portugal"
               },
               {
                 "value": "PY",
-                "title": "巴拉圭"
+                "title": "Paraguay"
               },
               {
                 "value": "QA",
-                "title": "卡塔尔"
+                "title": "Qatar"
               },
               {
                 "value": "RE",
-                "title": "留尼汪"
+                "title": "Réunion"
               },
               {
                 "value": "RO",
-                "title": "罗马尼亚"
+                "title": "Romania"
               },
               {
                 "value": "RS",
-                "title": "塞尔维亚"
+                "title": "Serbia"
               },
               {
                 "value": "RU",
-                "title": "俄罗斯"
+                "title": "Russia"
               },
               {
                 "value": "SA",
-                "title": "沙特阿拉伯"
+                "title": "Saudi Arabia"
               },
               {
                 "value": "SE",
-                "title": "瑞典"
+                "title": "Sweden"
               },
               {
                 "value": "SG",
-                "title": "新加坡"
+                "title": "Singapore"
               },
               {
                 "value": "SI",
-                "title": "斯洛文尼亚"
+                "title": "Slovenia"
               },
               {
                 "value": "SK",
-                "title": "斯洛伐克"
+                "title": "Slovakia"
               },
               {
                 "value": "SV",
-                "title": "萨尔瓦多"
+                "title": "El Salvador"
               },
               {
                 "value": "TH",
-                "title": "泰国"
+                "title": "Thailand"
               },
               {
                 "value": "TR",
-                "title": "土耳其"
+                "title": "Turkey"
               },
               {
                 "value": "TT",
-                "title": "特立尼达和多巴哥"
+                "title": "Trinidad and Tobago"
               },
               {
                 "value": "TW",
-                "title": "台湾"
+                "title": "Taiwan"
               },
               {
                 "value": "UA",
-                "title": "乌克兰"
+                "title": "Ukraine"
               },
               {
                 "value": "US",
-                "title": "美国"
+                "title": "United States"
               },
               {
                 "value": "UY",
-                "title": "乌拉圭"
+                "title": "Uruguay"
               },
               {
                 "value": "VE",
-                "title": "委内瑞拉"
+                "title": "Venezuela"
               },
               {
                 "value": "VN",
-                "title": "越南"
+                "title": "Vietnam"
               },
               {
                 "value": "ZA",
-                "title": "南非"
+                "title": "South Africa"
               }
             ],
             "hint": "",
@@ -1316,10 +1311,9 @@
             "kind": "number",
             "default": 10,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 10
+            "minimum": 0
           }
         ]
       },
@@ -1474,8 +1468,7 @@
             "options": null,
             "hint": "",
             "advanced": false,
-            "minimum": 1940,
-            "maximum": 2200,
+            "minimum": 0,
             "visible_when": {
               "time": [
                 "fixed"
@@ -1566,10 +1559,9 @@
             "kind": "number",
             "default": 20,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 500
+            "minimum": 0
           },
           {
             "key": "statuses",
@@ -1712,7 +1704,7 @@
               },
               {
                 "value": "CN",
-                "title": "中国大陆"
+                "title": "中国"
               },
               {
                 "value": "KR",
@@ -1734,8 +1726,7 @@
             "options": null,
             "hint": "",
             "advanced": true,
-            "minimum": 0,
-            "maximum": 10
+            "minimum": 0
           }
         ]
       },
@@ -1809,10 +1800,9 @@
             "kind": "number",
             "default": 20,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 50
+            "minimum": 0
           }
         ]
       },
@@ -1878,47 +1868,47 @@
             "options": [
               {
                 "value": "us",
-                "title": "美国"
+                "title": "United States"
               },
               {
                 "value": "gb",
-                "title": "英国"
+                "title": "United Kingdom"
               },
               {
                 "value": "cn",
-                "title": "中国大陆"
+                "title": "Mainland China"
               },
               {
                 "value": "hk",
-                "title": "香港"
+                "title": "Hong Kong"
               },
               {
                 "value": "tw",
-                "title": "台湾"
+                "title": "Taiwan"
               },
               {
                 "value": "jp",
-                "title": "日本"
+                "title": "Japan"
               },
               {
                 "value": "kr",
-                "title": "韩国"
+                "title": "South Korea"
               },
               {
                 "value": "au",
-                "title": "澳大利亚"
+                "title": "Australia"
               },
               {
                 "value": "ca",
-                "title": "加拿大"
+                "title": "Canada"
               },
               {
                 "value": "de",
-                "title": "德国"
+                "title": "Germany"
               },
               {
                 "value": "fr",
-                "title": "法国"
+                "title": "France"
               }
             ],
             "hint": "",
@@ -1954,10 +1944,9 @@
             "kind": "number",
             "default": 20,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 100
+            "minimum": 0
           }
         ]
       },
@@ -2342,10 +2331,9 @@
             "kind": "number",
             "default": 20,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 100
+            "minimum": 0
           }
         ]
       },
@@ -2550,10 +2538,9 @@
             "kind": "number",
             "default": 20,
             "options": null,
-            "hint": "",
+            "hint": "0 表示暂停此规则；实际返回数量取决于数据源，接口有上限时按上限获取。",
             "advanced": false,
-            "minimum": 1,
-            "maximum": 100
+            "minimum": 0
           }
         ]
       },
