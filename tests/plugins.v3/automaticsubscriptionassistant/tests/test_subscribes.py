@@ -233,7 +233,7 @@ def test_plugin_deletion_event_uses_sdk_snapshot(monkeypatch):
     plugin = plugin_module.AutomaticSubscriptionAssistant.__new__(plugin_module.AutomaticSubscriptionAssistant)
     plugin._settings = SimpleNamespace(global_config=SimpleNamespace(username=PLUGIN_USERNAME))
 
-    result = plugin._AutomaticSubscriptionAssistant__subscribe_manager().delete([1])
+    result = plugin._subscribe_manager().delete([1])
 
     assert result["ok_ids"] == [1]
     payload = send_event.call_args.args[1]
@@ -241,3 +241,40 @@ def test_plugin_deletion_event_uses_sdk_snapshot(monkeypatch):
     assert payload["subscribe_info"] == subscription.model_dump(mode="json")
     assert payload["subscribe_info"]["season"] == 2
     assert payload["subscribe_info"]["media_source"] == "themoviedb"
+
+
+def test_list_mine_sources_match_media_type_season_and_episode_group():
+    """相同 ID 的电影、不同季及不同剧集组必须分别查询榜单归属。"""
+    oper = _oper([
+        _sub(1, media_id="42"),
+        _sub(2, media_id="42", type="电视剧", season=0),
+        _sub(3, media_id="42", type="电视剧", season=2, episode_group="cut-A"),
+        _sub(4, media_id="42", type="电视剧", season=2, episode_group="cut-B"),
+        _sub(5, media_id=None),
+        _sub(6, media_id="42", type="电视剧", season=None),
+        _sub(7, name="沙丘", media_id="another"),
+    ])
+    lookup = MagicMock(return_value={
+        "tmdb:movie:42": "douban", "tmdb:tv:42:s0": "mikan",
+        "tmdb:tv:42:s2:gcut-A": "netflix", "tmdb:tv:42:s2:gcut-B": "maoyan",
+    })
+    rows = SubscribeManager(oper, queries=oper, source_lookup=lookup).list_mine()
+    assert [row["provider"] for row in rows] == ["douban", "mikan", "netflix", "maoyan", None, None, None]
+    lookup.assert_called_once_with([
+        "tmdb:movie:42", "tmdb:tv:42:s0", "tmdb:tv:42:s2:gcut-A", "tmdb:tv:42:s2:gcut-B", "tmdb:movie:another",
+    ])
+
+
+@pytest.mark.parametrize("lang,expected", [("zh-CN", "豆瓣榜单"), ("zh-TW", "豆瓣榜單"), ("en-US", "Douban Rankings")])
+def test_subscriptions_api_localizes_ranking_source(lang, expected):
+    """API 返回实际榜单名称，缺少归属时不使用插件名冒充。"""
+    from app.plugins.automaticsubscriptionassistant import AutomaticSubscriptionAssistant
+
+    plugin = AutomaticSubscriptionAssistant.__new__(AutomaticSubscriptionAssistant)
+    manager = MagicMock()
+    manager.list_mine.return_value = [{"id": 1, "provider": "douban"}, {"id": 2, "provider": None}]
+    plugin._subscribe_manager = MagicMock(return_value=manager)
+    result = plugin.api_subscribes(lang=lang)
+    assert result["total"] == 2
+    assert result["list"][0]["provider_name"] == expected
+    assert result["list"][1]["provider_name"] is None

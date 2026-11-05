@@ -9,9 +9,9 @@ from app.schemas.types import MediaType
 from app.plugins.automaticsubscriptionassistant.core.config import GlobalConfig
 from app.plugins.automaticsubscriptionassistant.core.dedup import SubscribedIndex
 from app.plugins.automaticsubscriptionassistant.core.filters import FilterChain, build_filter_chain
-from app.plugins.automaticsubscriptionassistant.core.history import HistoryStore
-from app.plugins.automaticsubscriptionassistant.core.migration import migrate_history_from_kv
-from app.plugins.automaticsubscriptionassistant.core.models import HistoryRecord, RankMediaItem, SubscribeStatus
+from app.plugins.automaticsubscriptionassistant.services.history import HistoryStore
+from app.plugins.automaticsubscriptionassistant.database.legacy import migrate_history_from_kv
+from app.plugins.automaticsubscriptionassistant.schemas import HistoryRecord, RankMediaItem, SubscribeStatus
 from app.plugins.automaticsubscriptionassistant.providers.netflix import NetflixRankProvider
 from app.plugins.automaticsubscriptionassistant.providers.popular import PopularRankProvider
 from test_executor import _exec, _make_ctx, _make_store, _mediainfo, _PROVIDER
@@ -153,8 +153,8 @@ def test_netflix_failed_rich_pages_are_retried(monkeypatch):
     request = MagicMock(side_effect=RuntimeError("temporary failure"))
     monkeypatch.setattr(NetflixRankProvider, "_load_rich_page", request)
     opts = {"rich_metadata": True, "global": True, "global_media_types": ["TV (English)"]}
-    assert list(NetflixRankProvider().fetch(opts, None)) == []
-    assert list(NetflixRankProvider().fetch(opts, None)) == []
+    assert list(NetflixRankProvider()._fetch_options(opts, None)) == []
+    assert list(NetflixRankProvider()._fetch_options(opts, None)) == []
     assert request.call_count == 2
 
 
@@ -165,7 +165,7 @@ def test_most_popular_rich_global_uses_correct_dataset(monkeypatch):
     tsv = MagicMock(return_value=[])
     monkeypatch.setattr(provider, "_load_rich_page", rich)
     monkeypatch.setattr(provider, "_fetch_global", tsv)
-    list(provider.fetch({"rich_metadata": True, "use_cache": False, "global_dataset": "most-popular",
+    list(provider._fetch_options({"rich_metadata": True, "use_cache": False, "global_dataset": "most-popular",
                          "global_media_types": ["TV (English)"]}, None))
     rich.assert_not_called()
     assert tsv.call_args.args[0] == "most-popular"
@@ -308,6 +308,7 @@ def test_config_save_failure_does_not_reload_or_report_success():
     plugin = AutomaticSubscriptionAssistant.__new__(AutomaticSubscriptionAssistant)
     plugin._providers = []
     plugin.update_config = MagicMock(return_value=False)
+    plugin._database_ready = True
     plugin.init_plugin = MagicMock()
     plugin._refresh_jobs = MagicMock()
     assert plugin.api_save_config({"global": {}})["code"] == 1
@@ -322,6 +323,7 @@ def test_config_save_refreshes_host_schedule():
     plugin = AutomaticSubscriptionAssistant.__new__(AutomaticSubscriptionAssistant)
     plugin._providers = []
     plugin.update_config = MagicMock(return_value=True)
+    plugin._database_ready = True
     plugin.init_plugin = MagicMock()
     plugin._refresh_jobs = MagicMock()
     assert plugin.api_save_config({"global": {}})["code"] == 0
@@ -347,10 +349,11 @@ def test_retry_restores_original_source_candidate(monkeypatch):
     plugin._downloadchain = ctx.downloadchain
     plugin._subscribechain = ctx.subscribechain
     plugin._event = Event()
+    plugin._database_ready = True
     plugin.get_data = MagicMock()
     plugin.save_data = MagicMock()
-    monkeypatch.setattr(plugin, "_AutomaticSubscriptionAssistant__history_store", lambda: store)
-    monkeypatch.setattr(plugin, "_AutomaticSubscriptionAssistant__build_subscribed_index", SubscribedIndex)
+    monkeypatch.setattr(plugin, "_history_store", lambda: store)
+    monkeypatch.setattr(plugin, "_build_subscribed_index", SubscribedIndex)
     monkeypatch.setattr("app.plugins.automaticsubscriptionassistant.registry.get", lambda key: DoubanRankProvider(), raising=False)
     result = plugin.api_history_recognize({"unique": "old-error"})
     assert result["code"] == 0
@@ -391,6 +394,6 @@ def test_netflix_partial_empty_pages_are_not_cached(monkeypatch):
     monkeypatch.setattr(NetflixRankProvider, "_load_rich_page", request)
     options = {"rich_metadata": True, "global": False,
                "country_selections": {"US": ["TV"], "JP": ["TV"]}}
-    assert len(list(NetflixRankProvider().fetch(options, None))) == 1
-    assert len(list(NetflixRankProvider().fetch(options, None))) == 1
+    assert len(list(NetflixRankProvider()._fetch_options(options, None))) == 1
+    assert len(list(NetflixRankProvider()._fetch_options(options, None))) == 1
     assert request.call_count == 4

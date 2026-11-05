@@ -3,10 +3,10 @@
 配置为嵌套结构::
 
     {
-      "global": {"enabled": bool, "username": str, "exist_ok": bool, "notify": bool,
+      "global": {"enabled": bool, "username": str, "exist_ok": bool,
                  "onlyonce": bool, "clear": bool},
       "providers": {
-        "<provider_id>": {"enabled": bool, "cron": str, "options": {...}, "filters": {...}}
+        "<provider_id>": {"enabled": bool, "notify": bool, "cron": str, "options": {...}, "filters": {...}}
       }
     }
 
@@ -15,10 +15,11 @@
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
-    from .models import FieldSpec, ProviderSpec
+    from ..schemas import FieldSpec, ProviderSpec
 
 # 全局默认值集中定义，避免散落。
 DEFAULT_USERNAME = "自动订阅助手"
@@ -93,6 +94,8 @@ def _read_field(access: TypedConfigAccess, spec_field: "FieldSpec") -> Any:
         return access.get_float(spec_field.key, float(default) if default not in (None, "") else 0.0)
     if kind == "multi-select":
         return access.get_list(spec_field.key, default if isinstance(default, list) else [])
+    if kind == "rule-list":
+        return deepcopy(access._raw.get(spec_field.key, default))
     # text / select / cron / textarea / hidden 等按字符串处理
     return access.get_str(spec_field.key, str(default) if default is not None else "")
 
@@ -119,11 +122,6 @@ class GlobalConfig(TypedConfigAccess):
     def exist_ok(self) -> bool:
         """允许媒体库已存在时仍创建订阅；活动订阅继续查重。"""
         return self.get_bool("exist_ok", True)
-
-    @property
-    def notify(self) -> bool:
-        """是否推送运行结果通知。"""
-        return self.get_bool("notify", False)
 
     @property
     def onlyonce(self) -> bool:
@@ -153,6 +151,11 @@ class ProviderConfig(TypedConfigAccess):
     def enabled(self) -> bool:
         """该来源是否启用。"""
         return self.get_bool("enabled", False)
+
+    @property
+    def notify(self) -> bool:
+        """是否发送该来源的运行结果或失败通知，独立于其它来源。"""
+        return self.get_bool("notify", False)
 
     @property
     def cron(self) -> str:
@@ -198,7 +201,6 @@ def build_defaults(specs: List["ProviderSpec"]) -> dict:
             "enabled": False,
             "username": DEFAULT_USERNAME,
             "exist_ok": True,
-            "notify": False,
             "history_keep": DEFAULT_HISTORY_KEEP,
             "onlyonce": False,
             "clear": False,
@@ -206,10 +208,11 @@ def build_defaults(specs: List["ProviderSpec"]) -> dict:
         "providers": {},
     }
     for spec in specs:
-        options = {f.key: f.default for f in (spec.options_schema or [])}
-        filters = {f.key: f.default for f in (spec.filters_schema or [])}
+        options = {f.key: deepcopy(f.default) for f in (spec.options_schema or [])}
+        filters = {f.key: deepcopy(f.default) for f in (spec.filters_schema or [])}
         defaults["providers"][spec.provider_id] = {
             "enabled": False,
+            "notify": False,
             "cron": spec.default_cron,
             "options": options,
             "filters": filters,

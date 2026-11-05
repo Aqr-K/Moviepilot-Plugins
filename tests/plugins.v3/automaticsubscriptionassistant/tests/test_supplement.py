@@ -6,11 +6,11 @@ import pytest
 
 from app.schemas.types import MediaType
 from app.plugins.automaticsubscriptionassistant import AutomaticSubscriptionAssistant
-from app.plugins.automaticsubscriptionassistant.core.blacklist import BlacklistStore
+from app.plugins.automaticsubscriptionassistant.services.blacklist import BlacklistStore
 from app.plugins.automaticsubscriptionassistant.core.config import GlobalConfig
 from app.plugins.automaticsubscriptionassistant.core.executor import SubscribeExecutor
 from app.plugins.automaticsubscriptionassistant.core.filters import FilterChain
-from app.plugins.automaticsubscriptionassistant.core.models import HistoryRecord, SubscribeStatus
+from app.plugins.automaticsubscriptionassistant.schemas import HistoryRecord, SubscribeStatus
 from app.plugins.automaticsubscriptionassistant.core.supplement import HistorySupplementService, parse_supplement
 from test_executor import _make_ctx, _make_store, _mediainfo, _PROVIDER
 
@@ -88,11 +88,8 @@ def test_existing_subscription_prevents_manual_duplicate(supplement):
 def test_blacklist_still_blocks_manual_submission(supplement):
     """长期忽略规则也约束补充编辑提交。"""
     service, context, _ = supplement
-    data = {}
-    context.get_data = data.get
-    context.save_data = lambda key, value: data.__setitem__(key, value)
-    BlacklistStore(context.get_data, context.save_data).add({"title": "补充剧名", "type": "电视剧",
-                                                           "media_source": "themoviedb", "media_id": "438631"})
+    context.blacklist.add({"title": "补充剧名", "type": "电视剧",
+                           "media_source": "themoviedb", "media_id": "438631"})
     result = service.submit(request_body())
     assert result["status"] == "blacklisted"
     context.chain.recognize_media.assert_not_called()
@@ -202,6 +199,8 @@ def test_endpoint_is_authenticated_and_reports_validation_error():
     plugin._downloadchain = MagicMock()
     plugin._subscribechain = MagicMock()
     plugin._event = None
+    plugin._database_ready = True
+    plugin.blacklist_store = MagicMock()
     plugin._settings = MagicMock()
-    plugin._AutomaticSubscriptionAssistant__history_store = MagicMock()
+    plugin._history_store = MagicMock()
     assert plugin.api_history_supplement({})["code"] == 1

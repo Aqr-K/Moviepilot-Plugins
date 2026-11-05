@@ -63,9 +63,10 @@ from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
 
-from ..core.models import FieldSpec, ProviderSpec, RankMediaItem
-from ..core.provider import ProviderContext, RankProvider
+from ..core.provider import ProviderContext
 from ..core.registry import register
+from ..core.rules import RuleRankProvider
+from ..schemas import FieldSpec, ProviderSpec, RankMediaItem
 
 # 三个官方 Top10 TSV 地址（GET，无鉴权）。
 MOST_POPULAR_URL = "https://www.netflix.com/tudum/top10/data/most-popular.tsv"
@@ -256,7 +257,7 @@ _FALLBACK_TTL_SECONDS = 6 * 24 * 3600
 
 
 @register
-class NetflixRankProvider(RankProvider):
+class NetflixRankProvider(RuleRankProvider):
     """奈飞 Top10 榜单来源：把官方 TSV 榜单映射为标准化 ``RankMediaItem``。
 
     全球榜与国家榜相互独立、可同时启用：全球按 ``global_dataset`` 取 most-popular（史上最热·
@@ -272,7 +273,7 @@ class NetflixRankProvider(RankProvider):
     provider_id = "netflix"
     provider_name = "奈飞榜单"
 
-    def get_spec(self) -> ProviderSpec:
+    def _source_spec(self) -> ProviderSpec:
         """返回本来源的元描述（选项与过滤器 schema）。
 
         媒体类型已由全球/国家的 category 选择区分、Netflix 无年份数据，故 ``filters_schema``
@@ -284,37 +285,6 @@ class NetflixRankProvider(RankProvider):
             # 榜单每周更新一次，默认每周三上午抓一次。
             default_cron="0 11 * * 3",
             options_schema=[
-                FieldSpec(key="global", label="全球榜", kind="switch", default=True),
-                FieldSpec(
-                    key="global_dataset",
-                    label="全球数据源",
-                    kind="select",
-                    default=DATASET_WEEKLY,
-                    options=[
-                        {"title": "最新周榜", "value": DATASET_WEEKLY},
-                        {"title": "史上最热(不分周)", "value": DATASET_POPULAR},
-                    ],
-                ),
-                FieldSpec(
-                    key="global_media_types",
-                    label="全球媒体类型",
-                    kind="multi-select",
-                    default=[c["value"] for c in GLOBAL_CATEGORIES],
-                    options=list(GLOBAL_CATEGORIES),
-                ),
-                FieldSpec(
-                    key="country_selections",
-                    label="国家/地区 × 媒体类型",
-                    kind="region-media-map",
-                    default={},
-                    options=[
-                        {"title": name, "value": iso2}
-                        for iso2, name in COUNTRIES.items()
-                    ],
-                    columns=list(COUNTRY_CATEGORIES),
-                    hint="按地区分别选择要监听的媒体类型（可各不相同）",
-                ),
-                FieldSpec(key="limit", label="每榜取前N", kind="number", default=_DEFAULT_LIMIT),
                 FieldSpec(key="proxy", label="使用代理访问", kind="switch", default=False),
                 FieldSpec(
                     key="rich_metadata",
@@ -346,13 +316,8 @@ class NetflixRankProvider(RankProvider):
             filters_schema=[],
         )
 
-    def has_listening(self, options: dict) -> bool:
-        """全球榜开启且选了媒体类型，或存在任一启用的国家×媒体类型组合。"""
-        options = options or {}
-        global_has = bool(options.get("global", True)) and bool(self._as_list(options.get("global_media_types")))
-        return global_has or bool(self._resolve_country_selections(options))
 
-    def fetch(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
+    def _fetch_options(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
         """抓取奈飞 Top10 榜单，逐条产出 ``RankMediaItem``（带按周缓存）。
 
         全球榜（``global`` 为真且 ``global_media_types`` 非空）与国家榜（``countries`` 非空且
@@ -477,35 +442,8 @@ class NetflixRankProvider(RankProvider):
 
     @classmethod
     def _resolve_country_selections(cls, options: dict) -> Dict[str, List[str]]:
-        """归一化「地区 × 媒体类型」映射为 ``{iso2: [category, ...]}``。
-
-        优先读新字段 ``country_selections``（前端 region-media-map 产出的 dict）；缺省或非法时
-        **向后兼容**回退旧字段 ``countries`` × ``country_media_types``（笛卡尔积套用到所有国家）。
-        仅保留有效 iso2 与有效类型（Films/TV），媒体类型为空的地区剔除。
-        """
-        valid_cats = {c["value"] for c in COUNTRY_CATEGORIES}
-        result: Dict[str, List[str]] = {}
-        raw = options.get("country_selections")
-        if isinstance(raw, dict) and raw:
-            for iso2, cats in raw.items():
-                if iso2 not in COUNTRIES:
-                    continue
-                # 条目形态兼容：新 {"on": bool, "cats": [...]}（可禁用而不丢配置）与旧 [...]。
-                if isinstance(cats, dict):
-                    if not cats.get("on", True):
-                        continue  # 禁用的组合跳过（配置保留但本轮不生效）
-                    cats = cats.get("cats", [])
-                cats_list = [c for c in cls._as_list(cats) if c in valid_cats]
-                if cats_list:
-                    result[iso2] = cats_list
-            return result
-        # 向后兼容：旧的 countries + country_media_types 统一套用。
-        countries = [c for c in cls._as_list(options.get("countries")) if c in COUNTRIES]
-        country_cats = [c for c in cls._as_list(options.get("country_media_types")) if c in valid_cats]
-        if countries and country_cats:
-            for iso2 in countries:
-                result[iso2] = list(country_cats)
-        return result
+        """读取单条已校验规则转换出的内部请求参数。"""
+        return options.get('country_selections', {})
 
     @classmethod
     def _cache_key(cls, options: dict) -> str:

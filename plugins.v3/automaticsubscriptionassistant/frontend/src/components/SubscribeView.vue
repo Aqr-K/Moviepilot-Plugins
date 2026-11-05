@@ -141,6 +141,7 @@ const subscriptionManager = inject('moviepilot:subscriptionManager', null)
 const nativePending = reactive(new Set())
 let disposed = false
 const PLUGIN = 'plugin/AutomaticSubscriptionAssistant'
+const UNKNOWN_PROVIDER = '__unknown__'
 const THEME_COLORS = { primary: 1, secondary: 1, success: 1, info: 1, warning: 1, error: 1 }
 
 const STATE_META = {
@@ -151,7 +152,7 @@ const STATE_META = {
 }
 
 const MSG = {
-  'zh-CN': {
+  'zh-CN': { artist: '艺术家', albumType: '专辑', recordingType: '单曲',
     edit: '编辑', search: '搜索', reset: '重置', activity: '订阅活动', detail: '媒体详情', nativeUnavailable: '当前主程序未提供原生订阅管理入口，请升级主程序前端。',
     select: '多选', exitSelect: '退出多选', selectedN: '已选 {n} 项', searchPh: '搜索名称…',
     selLoaded: '选择已加载', selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
@@ -159,15 +160,15 @@ const MSG = {
     all: '全部', 'st.R': '订阅中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暂停',
     filter: '筛选', filterTitle: '筛选与搜索', filterType: '类型', filterStatus: '状态', filterYear: '发行年份',
     yearFrom: '起始年', yearTo: '结束年', filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
-    clearFilters: '清除筛选', 'mt.movie': '电影', 'mt.tv': '电视剧',
-    kType: '类型', kGroup: '剧集组', kSource: '来源', kTime: '订阅时间', kYear: '发行年份', source: '自动订阅助手',
+    clearFilters: '清除筛选', 'mt.music': '音乐', 'mt.movie': '电影', 'mt.tv': '电视剧',
+    kType: '类型', kGroup: '剧集组', kSource: '榜单来源', kTime: '订阅时间', kYear: '发行年份',
     emptyNone: '暂无本插件创建的订阅', emptyFiltered: '没有符合条件的订阅', emptyHint: '启用来源运行后，订阅会出现在这里',
     error: '获取订阅失败：', actionFailed: '操作失败：',
     confirmDelete: '确认取消选中的 {n} 个订阅？此操作不可撤销。',
     confirmPause: '确认暂停选中的 {n} 个订阅？', confirmResume: '确认恢复选中的 {n} 个订阅？',
     titleDelete: '取消订阅确认', titlePause: '暂停确认', titleResume: '恢复确认',
   },
-  'zh-TW': {
+  'zh-TW': { artist: '藝術家', albumType: '專輯', recordingType: '單曲',
     edit: '編輯', search: '搜尋', reset: '重設', activity: '訂閱活動', detail: '媒體詳情', nativeUnavailable: '目前主程式未提供原生訂閱管理入口，請升級主程式前端。',
     select: '多選', exitSelect: '退出多選', selectedN: '已選 {n} 項', searchPh: '搜尋名稱…',
     selLoaded: '選擇已載入', selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
@@ -175,15 +176,15 @@ const MSG = {
     all: '全部', 'st.R': '訂閱中', 'st.N': '新建', 'st.P': '待定', 'st.S': '已暫停',
     filter: '篩選', filterTitle: '篩選與搜尋', filterType: '類型', filterStatus: '狀態', filterYear: '發行年份',
     yearFrom: '起始年', yearTo: '結束年', filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
-    clearFilters: '清除篩選', 'mt.movie': '電影', 'mt.tv': '電視劇',
-    kType: '類型', kGroup: '劇集組', kSource: '來源', kTime: '訂閱時間', kYear: '發行年份', source: '自動訂閱助手',
+    clearFilters: '清除篩選', 'mt.music': '音樂', 'mt.movie': '電影', 'mt.tv': '電視劇',
+    kType: '類型', kGroup: '劇集組', kSource: '榜單來源', kTime: '訂閱時間', kYear: '發行年份',
     emptyNone: '暫無本外掛建立的訂閱', emptyFiltered: '沒有符合條件的訂閱', emptyHint: '啟用來源執行後，訂閱會出現在這裡',
     error: '取得訂閱失敗：', actionFailed: '操作失敗：',
     confirmDelete: '確認取消選中的 {n} 個訂閱？此操作不可復原。',
     confirmPause: '確認暫停選中的 {n} 個訂閱？', confirmResume: '確認恢復選中的 {n} 個訂閱？',
     titleDelete: '取消訂閱確認', titlePause: '暫停確認', titleResume: '恢復確認',
   },
-  'en-US': {
+  'en-US': { artist: 'Artist', albumType: 'Album', recordingType: 'Song',
     edit: 'Edit', search: 'Search', reset: 'Reset', activity: 'Subscription activity', detail: 'Media details', nativeUnavailable: 'Update the MoviePilot frontend to use native subscription management.',
     select: 'Select', exitSelect: 'Done', selectedN: '{n} selected', searchPh: 'Search name…',
     selLoaded: 'Loaded items', selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
@@ -191,8 +192,8 @@ const MSG = {
     all: 'All', 'st.R': 'Active', 'st.N': 'New', 'st.P': 'Pending', 'st.S': 'Paused',
     filter: 'Filters', filterTitle: 'Filter & search', filterType: 'Type', filterStatus: 'Status', filterYear: 'Release year',
     yearFrom: 'From', yearTo: 'To', filterAll: 'All', searchLabel: 'Search', applyFilter: 'Apply', resetFilter: 'Reset',
-    clearFilters: 'Clear filters', 'mt.movie': 'Movies', 'mt.tv': 'TV series',
-    kType: 'Type', kGroup: 'Episode group', kSource: 'Source', kTime: 'Added', kYear: 'Year', source: 'Auto Subscribe Assistant',
+    clearFilters: 'Clear filters', 'mt.music': 'Music', 'mt.movie': 'Movies', 'mt.tv': 'TV series',
+    kType: 'Type', kGroup: 'Episode group', kSource: 'Ranking source', kTime: 'Added', kYear: 'Year',
     emptyNone: 'No subscriptions created by this plugin', emptyFiltered: 'No subscriptions match', emptyHint: 'Subscriptions appear here after sources run',
     error: 'Failed to load subscriptions: ', actionFailed: 'Action failed: ',
     confirmDelete: 'Unsubscribe {n} selected subscription(s)? This cannot be undone.',
@@ -234,12 +235,13 @@ async function blocked(result) {
 const loading = ref(true)
 const error = ref('')
 const rows = ref([])
-// 统一筛选模型（管理）：关键词 / 发行年份范围 / 类型(单选) / 状态(多选)。
-// 「留空即不过滤（全部）」：keyword='' / year=null / mtype=null / statuses=[]。桌面内联、移动弹窗共用；
+// 统一筛选模型（管理）：关键词 / 发行年份范围 / 类型(单选) / 状态与榜单来源(多选)。
+// 「留空即不过滤（全部）」：keyword='' / year=null / mtype=null / statuses=[] / providers=[]。
 // 弹窗编辑 draft 副本，点「应用」整体拷回（管理为客户端筛选，拷回即时生效）。
-const emptyFilters = () => ({ keyword: '', yearMin: null, yearMax: null, mtype: null, statuses: [] })
+const emptyFilters = () => ({ keyword: '', yearMin: null, yearMax: null, mtype: null, statuses: [], providers: [] })
 function cloneFilters(s) {
-  return { keyword: s.keyword, yearMin: s.yearMin, yearMax: s.yearMax, mtype: s.mtype, statuses: [...s.statuses] }
+  return { keyword: s.keyword, yearMin: s.yearMin, yearMax: s.yearMax, mtype: s.mtype,
+    statuses: [...s.statuses], providers: [...s.providers] }
 }
 const filters = reactive(emptyFilters())
 const draft = reactive(emptyFilters())
@@ -249,13 +251,16 @@ const selected = reactive(new Set())
 const acting = ref(false)
 const confirm = reactive({ open: false, kind: 'delete', ids: [] })
 
+function providerKey(item) { return item.provider || UNKNOWN_PROVIDER }
+
 const filtered = computed(() => {
   const kw = (filters.keyword || '').trim().toLowerCase()
-  const { yearMin, yearMax, mtype, statuses } = filters
+  const { yearMin, yearMax, mtype, statuses, providers } = filters
   return rows.value.filter(r => {
     if (kw && !String(r.name || '').toLowerCase().includes(kw)) return false
     if (mtype && r.type !== mtype) return false
     if (statuses.length && !statuses.includes(r.state)) return false
+    if (providers.length && !providers.includes(providerKey(r))) return false
     if (yearMin != null || yearMax != null) {
       const y = parseInt(r.year, 10)
       if (!Number.isFinite(y)) return false
@@ -287,18 +292,32 @@ const stateItems = computed(() => {
 const typeItems = computed(() => [
   { title: t('mt.movie'), value: '电影' },
   { title: t('mt.tv'), value: '电视剧' },
+  { title: t('mt.music'), value: '音乐' },
 ])
-// FilterPanel 字段配置（管理）：类型单选、状态多选 + 发行年份范围 + 搜索。
+const providerItems = computed(() => {
+  const sources = new Map()
+  rows.value.forEach(row => {
+    const key = providerKey(row)
+    if (!sources.has(key)) sources.set(key, {
+      name: key === UNKNOWN_PROVIDER ? t('unknown') : row.provider_name || row.provider,
+      count: 0,
+    })
+    sources.get(key).count++
+  })
+  return [...sources].map(([value, source]) => ({ title: `${source.name} (${source.count})`, value }))
+})
+// 所有筛选共用一份弹窗草稿；榜单按稳定 provider ID 匹配，不按本地化名称匹配。
 const filterFields = computed(() => [
   { type: 'search', key: 'keyword', label: t('searchLabel'), placeholder: t('searchPh') },
   { type: 'year-range', keyMin: 'yearMin', keyMax: 'yearMax', label: t('filterYear'), minText: t('yearFrom'), maxText: t('yearTo') },
   { type: 'select', key: 'mtype', multi: false, items: typeItems.value, label: t('filterType'), icon: 'mdi-shape-outline', allText: t('filterAll') },
   { type: 'select', key: 'statuses', multi: true, items: stateItems.value, label: t('filterStatus'), icon: 'mdi-flag-outline', allText: t('filterAll') },
+  { type: 'select', key: 'providers', multi: true, items: providerItems.value, label: t('kSource'), icon: 'mdi-rss', allText: t('filterAll') },
 ])
 const activeFilterCount = computed(() =>
   (filters.keyword ? 1 : 0) +
   (filters.yearMin != null || filters.yearMax != null ? 1 : 0) +
-  (filters.mtype ? 1 : 0) + (filters.statuses.length ? 1 : 0))
+  (filters.mtype ? 1 : 0) + (filters.statuses.length ? 1 : 0) + (filters.providers.length ? 1 : 0))
 const hasFilter = computed(() => activeFilterCount.value > 0)
 const confirmTitle = computed(() => t({ delete: 'titleDelete', pause: 'titlePause', resume: 'titleResume' }[confirm.kind]))
 const confirmText = computed(() => t({ delete: 'confirmDelete', pause: 'confirmPause', resume: 'confirmResume' }[confirm.kind], { n: confirm.ids.length }))
@@ -320,8 +339,9 @@ function mediaName(item) {
 }
 function cardLines(item) {
   return [
-    { icon: 'mdi-shape-outline', label: t('kType'), value: item.type || t('unknown') },
-    { icon: 'mdi-robot-outline', label: t('kSource'), value: t('source') },
+    { icon: 'mdi-shape-outline', label: t('kType'), value: item.type === '音乐' ? `${item.type} · ${item.music_type === 'album' ? t('albumType') : t('recordingType')}` : item.type || t('unknown') },
+    ...(item.type === '音乐' && item.artists?.length ? [{ icon: 'mdi-account-music', label: t('artist'), value: item.artists.join(' / ') }] : []),
+    { icon: 'mdi-rss', label: t('kSource'), value: item.provider_name || item.provider || t('unknown') },
     { icon: 'mdi-clock-outline', label: t('kTime'), value: item.date || t('unknown') },
     { icon: 'mdi-calendar', label: t('kYear'), value: item.year || t('unknown') },
   ]
@@ -391,20 +411,26 @@ async function runConfirm() {
   }
 }
 
+let loadGeneration = 0
 async function fetchSubs() {
+  const generation = ++loadGeneration
   loading.value = true
   error.value = ''
   try {
     if (!props.api || typeof props.api.get !== 'function') throw new Error('API')
-    const res = await props.api.get(`${PLUGIN}/subscribes`)
+    const res = await props.api.get(`${PLUGIN}/subscribes?lang=${locale.value}`)
+    if (disposed || generation !== loadGeneration) return
     rows.value = Array.isArray(res?.list) ? res.list : []
   } catch (e) {
+    if (disposed || generation !== loadGeneration) return
     error.value = t('error') + (e?.message || e)
     rows.value = []
   } finally {
-    loading.value = false
+    if (!disposed && generation === loadGeneration) loading.value = false
   }
 }
+
+watch(locale, fetchSubs)
 
 // 向父级同步页数；筛选变化（含弹窗「应用」拷回）时请求父级复位到第 1 页。
 watch(pageCount, v => emit('update:pageCount', v), { immediate: true })

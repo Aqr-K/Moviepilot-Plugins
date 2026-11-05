@@ -5,14 +5,15 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Iterator, Optional
 
 if TYPE_CHECKING:
-    from .models import ProviderSpec, RankMediaItem
+    from ..schemas import ProviderSpec, RankMediaItem
 
 
 class ProviderContext:
     """运行期依赖注入容器（链、日志、退出信号、代理开关、插件 KV 读写）。"""
 
     def __init__(self, chain, downloadchain, subscribechain, logger, event=None, proxy: bool = False,
-                 get_data=None, save_data=None):
+                 get_data=None, save_data=None, blacklist=None):
+        self.blacklist = blacklist
         self.chain = chain                    # 识别链（recognize_media）
         self.downloadchain = downloadchain    # 媒体库查重（get_no_exists_info）
         self.subscribechain = subscribechain  # 订阅查重/落地（exists / add）

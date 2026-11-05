@@ -34,12 +34,18 @@ _PROVIDER_NAMES: Dict[str, Dict[str, str]] = {
     "maoyan": {"zh-CN": "猫眼榜单", "zh-TW": "貓眼榜單", "en-US": "Maoyan Rankings"},
     "popular": {"zh-CN": "热门媒体", "zh-TW": "熱門媒體", "en-US": "Popular Media"},
     "mikan": {"zh-CN": "Mikan 季度新番", "zh-TW": "Mikan 季度新番", "en-US": "Mikan Seasonal Anime"},
+    "anilist": {"zh-CN": "AniList 动画榜单", "zh-TW": "AniList 動畫榜單", "en-US": "AniList Anime Charts"},
+    "spotify": {"zh-CN": "Spotify 音乐榜单", "zh-TW": "Spotify 音樂榜單", "en-US": "Spotify Charts"},
+    "applemusic": {"zh-CN": "苹果音乐榜单", "zh-TW": "蘋果音樂榜單", "en-US": "Apple Music Charts"},
+    "netease": {"zh-CN": "网易云音乐榜单", "zh-TW": "網易雲音樂榜單", "en-US": "NetEase Music Charts"},
+    "qqmusic": {"zh-CN": "腾讯音乐榜单", "zh-TW": "騰訊音樂榜單", "en-US": "QQ Music Charts"},
     "netflix": {"zh-CN": "奈飞榜单", "zh-TW": "奈飛榜單", "en-US": "Netflix Top 10"},
 }
 
 # 奈飞国家/地区名按 iso2 键翻译（(zh-CN, zh-TW)）；en-US 用选项自带英文名回退。
 # 国名源串本身是英文（COUNTRIES=iso2->英文），故 zh-CN 也需经此本地化。
 _COUNTRY_NAMES: Dict[str, tuple] = {
+    "CN": ("中国大陆", "中國大陸"),
     "AE": ("阿联酋", "阿聯酋"), "AR": ("阿根廷", "阿根廷"), "AT": ("奥地利", "奧地利"),
     "AU": ("澳大利亚", "澳洲"), "BD": ("孟加拉国", "孟加拉"), "BE": ("比利时", "比利時"),
     "BG": ("保加利亚", "保加利亞"), "BH": ("巴林", "巴林"), "BO": ("玻利维亚", "玻利維亞"),
@@ -77,7 +83,7 @@ _COUNTRY_NAMES: Dict[str, tuple] = {
 
 def _country_title(value: Any, lang: str) -> Optional[str]:
     """按 iso2 返回本地化国家名；非国家 value 或 en-US（无中文表）返回 None 交由回退。"""
-    pair = _COUNTRY_NAMES.get(value)
+    pair = _COUNTRY_NAMES.get(str(value).upper())
     if not pair:
         return None
     return {"zh-CN": pair[0], "zh-TW": pair[1]}.get(lang)
@@ -85,7 +91,23 @@ def _country_title(value: Any, lang: str) -> Optional[str]:
 
 # 中文源串 -> {lang: 译文}（字段 label + 选项 title；重复串共用）。
 _TEXT: Dict[str, Dict[str, str]] = {
+    "地区 × 榜单": {"zh-TW": "地區 × 榜單", "en-US": "Region × chart"},
+    "Apple Music 热播歌曲": {"zh-TW": "Apple Music 熱播歌曲", "en-US": "Apple Music most-played songs"},
+    "iTunes 热门歌曲": {"zh-TW": "iTunes 熱門歌曲", "en-US": "iTunes top songs"},
+    "iTunes 热门专辑": {"zh-TW": "iTunes 熱門專輯", "en-US": "iTunes top albums"},
     # ---- 字段 label ----
+    "音乐榜单": {"zh-TW": "音樂榜單", "en-US": "Music charts"},
+    "动画榜单": {"zh-TW": "動畫榜單", "en-US": "Anime charts"},
+    "动画形式": {"zh-TW": "動畫形式", "en-US": "Anime formats"},
+    "国家/地区": {"zh-TW": "國家/地區", "en-US": "Countries / regions"},
+    "正在流行": {"zh-TW": "正在流行", "en-US": "Trending"},
+    "历史人气": {"zh-TW": "歷史人氣", "en-US": "All-time popular"},
+    "最高评分": {"zh-TW": "最高評分", "en-US": "Top rated"},
+    "本季新番": {"zh-TW": "本季新番", "en-US": "Current season"},
+    "下季新番": {"zh-TW": "下季新番", "en-US": "Next season"},
+    "全球热门歌曲周榜": {"zh-TW": "全球熱門歌曲週榜", "en-US": "Global weekly top songs"},
+    "全球热门专辑周榜": {"zh-TW": "全球熱門專輯週榜", "en-US": "Global weekly top albums"},
+
     "热门榜单": {"zh-TW": "熱門榜單", "en-US": "Rank lists"},
     "RSSHub 地址": {"zh-TW": "RSSHub 位址", "en-US": "RSSHub base URL"},
     "自定义RSS地址": {"zh-TW": "自訂 RSS 位址", "en-US": "Custom RSS URLs"},
@@ -223,14 +245,6 @@ _HINTS: Dict[Any, Dict[str, str]] = {
         "zh-TW": "每行一個完整 RSS 位址（覆蓋上面的基址，可對接任意來源）",
         "en-US": "One full RSS URL per line (overrides the base above; any source)",
     },
-    ("maoyan", "web_platform_map"): {
-        "zh-TW": "依平台分別選擇要監聽的網播類型（可各不相同）；網路電影僅騰訊視頻/愛奇藝/優酷有資料",
-        "en-US": "Choose streaming types per platform; web films only on Tencent / iQIYI / Youku",
-    },
-    ("netflix", "country_selections"): {
-        "zh-TW": "依地區分別選擇要監聽的媒體類型（可各不相同）",
-        "en-US": "Choose media types per region independently",
-    },
     ("netflix", "rich_metadata"): {
         "zh-TW": "改抓 Tudum 榜單頁內嵌 GraphQL，帶年份/乾淨劇名/videoId，識別更準；全球非英語兩類無富頁會回退 TSV",
         "en-US": "Scrapes Tudum list-page GraphQL (year/clean title/videoId, more accurate); global non-English falls back to TSV",
@@ -270,6 +284,71 @@ _HINTS: Dict[Any, Dict[str, str]] = {
 }
 
 
+_TEXT.update({'榜单规则': {'zh-TW': '榜單規則', 'en-US': 'Chart rules'},
+ '排行依据': {'zh-TW': '排行依據', 'en-US': 'Rank by'},
+ '趋势': {'zh-TW': '趨勢', 'en-US': 'Trending'},
+ '人气': {'zh-TW': '人氣', 'en-US': 'Popularity'},
+ '评分': {'zh-TW': '評分', 'en-US': 'Score'},
+ '收藏数': {'zh-TW': '收藏數', 'en-US': 'Favourites'},
+ '时间范围': {'zh-TW': '時間範圍', 'en-US': 'Time range'},
+ '不限': {'zh-TW': '不限', 'en-US': 'Any'},
+ '本季': {'zh-TW': '本季', 'en-US': 'Current season'},
+ '上季': {'zh-TW': '上季', 'en-US': 'Previous season'},
+ '下季': {'zh-TW': '下季', 'en-US': 'Next season'},
+ '指定年份与季度': {'zh-TW': '指定年份與季度', 'en-US': 'Year and season'},
+ '年份': {'zh-TW': '年份', 'en-US': 'Year'},
+ '季度': {'zh-TW': '季度', 'en-US': 'Season'},
+ '全年': {'zh-TW': '全年', 'en-US': 'All year'},
+ '冬季': {'zh-TW': '冬季', 'en-US': 'Winter'},
+ '春季': {'zh-TW': '春季', 'en-US': 'Spring'},
+ '夏季': {'zh-TW': '夏季', 'en-US': 'Summer'},
+ '秋季': {'zh-TW': '秋季', 'en-US': 'Fall'},
+ '动画形式': {'zh-TW': '動畫形式', 'en-US': 'Anime formats'},
+ '电视动画': {'zh-TW': '電視動畫', 'en-US': 'TV anime'},
+ '短篇电视动画': {'zh-TW': '短篇電視動畫', 'en-US': 'TV short'},
+ '动画电影': {'zh-TW': '動畫電影', 'en-US': 'Anime film'},
+ '网络动画': {'zh-TW': '網路動畫', 'en-US': 'ONA'},
+ '特别篇': {'zh-TW': '特別篇', 'en-US': 'Special'},
+ '获取条数': {'zh-TW': '取得條數', 'en-US': 'Results'},
+ '播出状态': {'zh-TW': '播出狀態', 'en-US': 'Airing status'},
+ '连载中': {'zh-TW': '連載中', 'en-US': 'Releasing'},
+ '已完结': {'zh-TW': '已完結', 'en-US': 'Finished'},
+ '未开播': {'zh-TW': '未開播', 'en-US': 'Not yet released'},
+ '已取消': {'zh-TW': '已取消', 'en-US': 'Cancelled'},
+ '暂停中': {'zh-TW': '暫停中', 'en-US': 'On hiatus'},
+ '题材': {'zh-TW': '題材', 'en-US': 'Genres'},
+ '标签': {'zh-TW': '標籤', 'en-US': 'Tags'},
+ '出品国家': {'zh-TW': '出品國家', 'en-US': 'Country of origin'},
+ '风格': {'zh-TW': '風格', 'en-US': 'Genres'},
+ '订阅人次≥': {'zh-TW': '訂閱人次≥', 'en-US': 'Subscribers ≥'},
+ '榜单': {'zh-TW': '榜單', 'en-US': 'Chart'},
+ '自定义 RSS': {'zh-TW': '自訂 RSS', 'en-US': 'Custom RSS'},
+ 'RSS 地址': {'zh-TW': 'RSS 位址', 'en-US': 'RSS URL'},
+ '全球榜单': {'zh-TW': '全球榜單', 'en-US': 'Global chart'},
+ '史上最热': {'zh-TW': '史上最熱', 'en-US': 'Most popular'},
+ '全球周榜': {'zh-TW': '全球週榜', 'en-US': 'Global weekly'},
+ '全球史上最热': {'zh-TW': '全球史上最熱', 'en-US': 'Global most popular'},
+ '热门榜': {'zh-TW': '熱門榜', 'en-US': 'Popular charts'},
+ 'ACG 榜': {'zh-TW': 'ACG 榜', 'en-US': 'ACG charts'},
+ '地区与语言榜': {'zh-TW': '地區與語言榜', 'en-US': 'Regional and language charts'},
+ '特色榜': {'zh-TW': '特色榜', 'en-US': 'Specialty charts'},
+ '巅峰榜': {'zh-TW': '巔峰榜', 'en-US': 'Top charts'},
+ '地区榜': {'zh-TW': '地區榜', 'en-US': 'Regional charts'},
+ '全球榜': {'zh-TW': '全球榜', 'en-US': 'Global charts'},
+ '其他': {'zh-TW': '其他', 'en-US': 'Other'},
+ '正在流行': {'zh-TW': '正在流行', 'en-US': 'Trending now'},
+ '本季新番': {'zh-TW': '本季新番', 'en-US': 'Current season anime'},
+ '上季新番': {'zh-TW': '上季新番', 'en-US': 'Previous season anime'},
+ '下季新番': {'zh-TW': '下季新番', 'en-US': 'Next season anime'},
+ '年度动画电影': {'zh-TW': '年度動畫電影', 'en-US': 'Anime films of the year'},
+ '热门剧集': {'zh-TW': '熱門劇集', 'en-US': 'Popular TV'},
+ '高分动画剧集': {'zh-TW': '高分動畫劇集', 'en-US': 'Highly rated animated TV'},
+ '热门动作电影': {'zh-TW': '熱門動作電影', 'en-US': 'Popular action films'},
+ '每张卡片独立设置条件；全部移除后停止监听。': {'zh-TW': '每張卡片獨立設定條件；全部移除後停止監聽。',
+                           'en-US': 'Each card has independent conditions. Removing all cards '
+                                    'stops listening.'}})
+
+
 def localize_provider_name(provider_id: Optional[str], fallback: str, lang: Any) -> str:
     """
     按 provider_id 稳定键返回来源显示名（与硬编码 provider_name 解耦）。
@@ -301,25 +380,40 @@ def localize_spec(spec: Dict[str, Any], lang: Any) -> Dict[str, Any]:
     if out.get("notice"):
         out["notice"] = _TEXT.get(out["notice"], {}).get(lang, out["notice"])
 
-    for schema_key in ("options_schema", "filters_schema"):
-        fields: List[Dict[str, Any]] = out.get(schema_key) or []
-        localized_fields = []
-        for field in fields:
-            nf = dict(field)
-            label = nf.get("label")
-            if label:
-                nf["label"] = _TEXT.get(label, {}).get(lang, label)
-            hint_override = _HINTS.get((pid, nf.get("key")), {}).get(lang)
-            if hint_override:
-                nf["hint"] = hint_override
-            for axis in ("options", "columns"):
-                axis_items = nf.get(axis)
-                if axis_items:
-                    nf[axis] = [
-                        {**it, "title": _country_title(it.get("value"), lang)
-                         or _TEXT.get(it.get("title", ""), {}).get(lang, it.get("title", ""))}
-                        for it in axis_items
-                    ]
-            localized_fields.append(nf)
-        out[schema_key] = localized_fields
+    def localize_field(field):
+        nf = dict(field)
+        label = nf.get('label')
+        if label:
+            nf['label'] = _TEXT.get(label, {}).get(lang, label)
+        nf['hint'] = _HINTS.get((pid, nf.get('key')), {}).get(lang, nf.get('hint', ''))
+        def option(it):
+            return {**it, 'title':_country_title(it.get('value'), lang) or _TEXT.get(it.get('title', ''), {}).get(lang, it.get('title', '')),
+                    **({'group':_TEXT.get(it['group'], {}).get(lang, it['group'])} if it.get('group') else {})}
+        for axis in ('options',):
+            if nf.get(axis):
+                nf[axis] = [option(it) for it in nf[axis]]
+        if nf.get('fields'):
+            nf['fields'] = [localize_field(f) for f in nf['fields']]
+        if nf.get('options_by'):
+            nf['options_by'] = {**nf['options_by'], 'values':{k:[option(it) for it in v] for k,v in nf['options_by']['values'].items()}}
+        if nf.get('presets'):
+            nf['presets'] = [{**preset, 'name':_TEXT.get(preset.get('name'), {}).get(lang, preset.get('name'))} for preset in nf['presets']]
+        return nf
+    for schema_key in ('options_schema', 'filters_schema'):
+        out[schema_key] = [localize_field(f) for f in out.get(schema_key) or []]
     return out
+
+_TEXT.update({
+    '地区': {'zh-TW':'地區', 'en-US':'Region'},
+    '平台': {'zh-TW':'平台', 'en-US':'Platform'},
+    '网播类型': {'zh-TW':'網播類型', 'en-US':'Streaming type'},
+    '网播热度榜': {'zh-TW':'網播熱度榜', 'en-US':'Streaming popularity'},
+    '全球最新周榜': {'zh-TW':'全球最新週榜', 'en-US':'Global weekly'},
+    '地区周榜': {'zh-TW':'地區週榜', 'en-US':'Regional weekly'},
+    '美国热播歌曲': {'zh-TW':'美國熱播歌曲', 'en-US':'US most-played songs'},
+    '日本热门歌曲': {'zh-TW':'日本熱門歌曲', 'en-US':'Japan top songs'},
+    '美国热门专辑': {'zh-TW':'美國熱門專輯', 'en-US':'US top albums'},
+    '电影票房': {'zh-TW':'電影票房', 'en-US':'Movie box office'},
+    '全网电视剧': {'zh-TW':'全網電視劇', 'en-US':'All-platform TV'},
+    '日本地区剧集': {'zh-TW':'日本地區劇集', 'en-US':'Japan TV'},
+})

@@ -5,15 +5,30 @@
     role="img"
     :aria-label="provider"
   >
-    <span v-if="svg" class="asa-logo__svg" v-html="svg"></span>
+    <img
+      v-if="image && !imageFailed"
+      class="asa-logo__image"
+      :src="image"
+      alt=""
+      aria-hidden="true"
+      :draggable="false"
+      @error="imageFailed = true"
+    />
+    <span v-else-if="svg" class="asa-logo__svg" v-html="svg"></span>
     <v-icon v-else :icon="fallback" :size="size" />
   </span>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+// PNG 随联邦组件内嵌，避免宿主页面将图片地址解析到主程序资源目录。
+import anilistPng from '../assets/providers/anilist.png'
+import applemusicPng from '../assets/providers/applemusic.png'
+import neteasePng from '../assets/providers/netease.png'
+import qqmusicPng from '../assets/providers/qqmusic.png'
+import spotifyPng from '../assets/providers/spotify.png'
 // 猫眼电影官方 logo（用户提供的官方 SVG，以 raw 内联，保持联邦块自包含、规避资源 URL 解析问题）
-import maoyanSvg from '../assets/maoyan.svg?raw'
+import maoyanSvg from '../assets/providers/maoyan.svg?raw'
 
 // 官方 SVG 规整：去内部 <style>（防全局 path 样式泄漏）、补 viewBox 并去固定尺寸以随容器缩放
 function normalizeSvg(raw) {
@@ -33,6 +48,16 @@ const props = defineProps({
 })
 
 const px = computed(() => `${Number(props.size)}px`)
+const IMAGES = {
+  anilist: anilistPng,
+  applemusic: applemusicPng,
+  netease: neteasePng,
+  qqmusic: qqmusicPng,
+  spotify: spotifyPng,
+}
+const image = computed(() => IMAGES[props.provider] || '')
+const imageFailed = ref(false)
+watch(image, () => { imageFailed.value = false })
 
 /**
  * 各来源的品牌化内联 SVG（24×24 视图框，几何简化、单色可识别）。
@@ -83,4 +108,5 @@ const svg = computed(() => LOGOS[props.provider] || '')
 }
 .asa-logo__svg { display: inline-flex; inline-size: 100%; block-size: 100%; }
 .asa-logo__svg :deep(svg) { inline-size: 100%; block-size: 100%; display: block; }
+.asa-logo__image { display: block; inline-size: 100%; block-size: 100%; object-fit: contain; }
 </style>

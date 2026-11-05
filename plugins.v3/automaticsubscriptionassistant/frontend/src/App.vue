@@ -97,16 +97,22 @@ const frameStyle = computed(() => ({ maxWidth: `${previewWidth.value}px` }))
 
 // 代表性已保存配置：启用部分来源，供脏值追踪 / 概览渲染
 const mockConfig = {
-  global: { enabled: true, notify: true, exist_ok: true, username: '自动订阅助手', onlyonce: false, clear: false },
+  global: { enabled: true, exist_ok: true, username: '自动订阅助手', onlyonce: false, clear: false },
   providers: {
+    applemusic: { enabled:false, notify:false, options:{ rules:[
+      { name:'美国专辑', country:'us', chart:'itunes-albums', limit:20, on:true },
+      { name:'日本歌曲', country:'jp', chart:'apple-songs', limit:20, on:true },
+    ] } },
     douban: { enabled: true, cron: '0 8 * * *' },
     maoyan: { enabled: true, cron: '30 9 * * *' },
     popular: { enabled: false },
     mikan: { enabled: true, cron: '0 10 * * 1' },
     netflix: {
       enabled: true,
-      // 演示逐区组合：美国=电影+剧集、台湾=仅电影、日本=仅剧集
-      options: { country_selections: { US: ['Films', 'TV'], TW: ['Films'], JP: ['TV'] } },
+      options: { rules:[
+        { name:'全球周榜', dataset:'weekly', categories:['Films (English)','TV (English)'], limit:10, on:true },
+        { name:'日本剧集', dataset:'country', country:'JP', categories:['TV'], limit:10, on:true },
+      ] },
     },
   },
 }

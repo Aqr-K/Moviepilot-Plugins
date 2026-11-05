@@ -1,12 +1,12 @@
-"""core/history.py 单元测试：自有表读写、去重判定、分页、增删清统计。"""
+"""services/history.py 单元测试：自有表读写、去重判定、分页、增删清统计。"""
 from __future__ import annotations
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.plugins.automaticsubscriptionassistant.core.history import HistoryStore
-from app.plugins.automaticsubscriptionassistant.core.models import HistoryRecord
+from app.plugins.automaticsubscriptionassistant.services.history import HistoryStore
+from app.plugins.automaticsubscriptionassistant.schemas import HistoryRecord
 
 
 def _make_store(initial=None):
@@ -232,3 +232,45 @@ def test_stats():
     assert stats["total"] == 3
     assert stats["by_provider"] == {"douban": 2, "maoyan": 1}
     assert stats["by_status"] == {"subscribed": 2, "filtered": 1}
+
+
+def test_provider_lookup_preserves_first_source_after_display_history_pruning():
+    """成功归属不会被后续来源覆盖，修剪展示历史后仍能查到。"""
+    store, _ = _make_store()
+    store.record(_rec("tmdb:tv:42:s0", provider="mikan"))
+    store.record(_rec("tmdb:tv:42:s0", provider="douban", status="already_handled"))
+    store.record(_rec("tmdb:movie:99", provider="netflix", time="2026-07-13 08:00:00"))
+    store.prune(1)
+    assert store.query()[1] == 1
+    assert store.providers_for(["tmdb:tv:42:s0", "tmdb:movie:99", "missing"]) == {
+        "tmdb:tv:42:s0": "mikan", "tmdb:movie:99": "netflix",
+    }
+
+
+def test_provider_lookup_uses_legacy_success_history_but_not_failed_candidates():
+    """旧版没有成功账本时回退成功历史，不把被过滤或异常的来源当成订阅来源。"""
+    from app.plugins.automaticsubscriptionassistant.db.models import SubscribeHistory
+
+    store, _ = _make_store()
+    with store._session() as session:
+        session.add_all([
+            SubscribeHistory(unique="tmdb:movie:1", provider="douban", status="subscribed"),
+            SubscribeHistory(unique="tmdb:movie:2", provider="maoyan", status="filtered"),
+            SubscribeHistory(unique="tmdb:movie:3", provider="netflix", status="error"),
+        ])
+    assert store.providers_for(["tmdb:movie:1", "tmdb:movie:2", "tmdb:movie:3"]) == {
+        "tmdb:movie:1": "douban",
+    }
+    assert store.providers_for([]) == {}
+
+
+def test_provider_lookup_batches_beyond_history_page_limit():
+    """归属读取不受列表页上限影响，也不会跨季或剧集组匹配。"""
+    from app.plugins.automaticsubscriptionassistant.db.models import SubscribeHandled
+
+    store, _ = _make_store()
+    keys = [f"tmdb:tv:{index}:s2:gcut-A" for index in range(1001)]
+    with store._session() as session:
+        session.add_all([SubscribeHandled(key=key, canonical=key, provider="douban") for key in keys])
+    providers = store.providers_for(keys + ["tmdb:tv:0:s1:gcut-A", "tmdb:tv:0:s2:gcut-B"])
+    assert providers == dict.fromkeys(keys, "douban")

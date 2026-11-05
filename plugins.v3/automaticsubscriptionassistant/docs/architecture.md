@@ -1,6 +1,6 @@
 # 自动订阅助手 v3 架构
 
-本插件后续仅维护、测试和发布 MoviePilot v3 版本。源码位于 `plugins.v3/automaticsubscriptionassistant/`，安装后由宿主加载到 `app/plugins/automaticsubscriptionassistant/`。本文以该目录当前源码为依据，对应插件 3.3.0；发行包以 Release 为准。
+本插件后续仅维护、测试和发布 MoviePilot v3 版本。源码位于 `plugins.v3/automaticsubscriptionassistant/`，安装后由宿主加载到 `app/plugins/automaticsubscriptionassistant/`。本文以该目录当前源码为依据，对应插件 3.4.0；发行包以 Release 为准。
 
 ## 模块职责
 
@@ -8,19 +8,22 @@
 | --- | --- |
 | `__init__.py` | 装载配置，注册来源定时任务、插件 API、数据库模型、侧栏与仪表盘入口 |
 | `core/provider.py`、`core/registry.py` | 定义 `RankProvider`、运行上下文 `ProviderContext`，注册并创建来源 |
-| `providers/*.py` | 抓取并解析五类来源，产出 `RankMediaItem`，声明配置与过滤字段 |
+| `providers/*.py` | 抓取并解析十类来源，产出 `RankMediaItem`，声明配置与过滤字段 |
+| `core/rules.py`、`providers/rule_specs.py` | 独立规则契约、请求转换、候选合并与命中轨迹 |
 | `core/config.py` | 类型转换、全局与来源配置访问、按 `ProviderSpec` 生成默认值 |
 | `core/filters.py` | 组合 pre/post 过滤链，返回接受或拒绝的原因 |
 | `core/dedup.py` | 从宿主活动订阅建立 `SubscribedIndex`，按身份、类型、季号和剧集组快速去重 |
 | `core/executor.py` | 单条候选的黑名单检查、识别、去重、订阅与历史记录 |
 | `core/runner.py` | 单来源抓取与逐条执行、退出信号、统计、异常兜底和历史修剪 |
-| `core/history.py`、`core/tables.py` | 展示历史、独立成功账本、SQL 查询与写入 |
-| `core/migration.py` | 归档并迁移旧 KV 历史，保留失败源以便重试 |
-| `core/blacklist.py` | 独立黑名单 KV 存储、匹配、管理 API、先保存规则再退订 |
+| `db/models/`、`db/oper/` | 独立 ORM 表模型与使用调用方 Session 的 SQL 操作 |
+| `database/` | Alembic 版本迁移、旧 KV 接管、数据库事务、备份与停机维护恢复 |
+| `services/` | 历史事务重试、黑名单校验与匹配 |
+| `api/` | 按领域拆分的 HTTP 端点与路由声明 |
 | `core/subscribes.py` | 管理本插件用户名对应的订阅，复核归属后退订或暂停/恢复 |
-| `core/models.py`、`core/i18n.py` | 候选、结果、配置描述与历史模型，来源名称和字段文本本地化 |
+| `providers/music_common.py`、`providers/music_catalogs.py` | 音乐候选投影及固定官方榜单目录 |
+| `schemas/`、`core/i18n.py` | 独立业务数据契约、来源名称和字段文本本地化 |
 
-来源只负责抓取与解析；识别、订阅和历史统一由 executor 处理。provider 可通过上下文中的 `get_data/save_data` 保存缓存，黑名单也使用这组宿主 KV 端口。
+来源只负责抓取与解析；识别、订阅和历史统一由 executor 处理。provider 可通过上下文中的 `get_data/save_data` 保存缓存，生产黑名单通过上下文注入 SQL 服务，KV 只用于旧数据接管和可重建缓存。
 
 ## 宿主 SDK 与兼容边界
 
@@ -53,11 +56,14 @@
 
 ## 执行流程
 
+通知由 `providers.<provider_id>.notify` 独立控制，默认关闭；来源与调度区域提供开关。全局设置不再提供通知总开关，也不回退旧全局值。运行结束汇总一条通知；部分处理后抓取失败合并统计与错误，避免同时发送失败和成功。空结果同样通知，停止中的旧任务不发送结果；通知发送失败只记录日志。
+
 每个启用且 cron 有效的来源注册独立任务。`POST /run` 则安排指定来源在约 3 秒后执行。
 
 ```mermaid
 flowchart TD
-    Fetch[来源抓取 RankMediaItem] --> Target[解析标题中的明确季号]
+    Rules[逐规则抓取与合并命中轨迹] --> Fetch[来源产出 RankMediaItem]
+    Fetch --> Target[解析标题中的明确季号]
     Target --> BlockPre{来源身份命中黑名单?}
     BlockPre -->|是| Ignored[blacklisted]
     BlockPre -->|否| Index{命中活动订阅索引?}
@@ -117,11 +123,11 @@ flowchart TD
 
 历史写入即时提交，查询、筛选和分页由 SQL 完成。`history_keep` 只修剪展示历史，成功账本保留；显式删除历史或清空历史才解除对应成功状态与别名。重新识别优先恢复来源快照，先保存新结果，再在适用时移除旧身份记录。
 
-表结构初始化使用 engine 弱引用集合与共享锁，兼容旧表候选列补齐。KV 历史迁移先归档再写库；备份失败保留源，部分失败留待重试，重复迁移不覆盖较新的数据库记录。
+表结构由 `database/migrations/` 的 Alembic 版本树接管；初始化先备份、迁移并验证结构，再导入旧 KV。失败时不调度自动任务。事务内核对当前 revision，拒绝未知版本和自动降级。完整管理边界、清理语义与维护操作见[数据库生命周期](database.md)。
 
 ## 黑名单
 
-规则单独保存在宿主插件 KV 的 `subscription_blacklist`，与历史表和成功账本分开。清空历史、修剪展示记录、删除订阅或重启插件不会移除规则。
+规则按行保存在插件自有 SQL 表 `subscription_blacklist`，与历史及成功账本一并进入数据库快照。旧同名 KV 自动归档接管，SQL 检查点避免重试复活已删除规则。清空历史、修剪展示记录、删除订阅或重启插件不会移除规则。
 
 - 电影按身份忽略；剧集可指定季或全部季。类型未知且只有 TMDB ID 时不在识别前直接拦截，避免电影与剧集 ID 空间重叠。
 - 从历史添加时保留原始来源与规范身份别名。整剧 TMDB 身份可覆盖不同季的豆瓣 subject ID。
@@ -154,13 +160,13 @@ Netflix TSV 按 UTF-8 解码，以换行符分行，避免特殊字符误断行�
 
 ## 前端、侧栏与 API
 
-详情/配置界面提供历史、管理、黑名单、配置四个标签。侧栏项以 `self.plugin_name` 显示“自动订阅助手”，使用 `mdi-rss`，归入 `subscribe` 分组、要求 `subscribe` 权限，保留 `nav_key=blacklist`。宿主聚合已启用插件的侧栏项；插件总开关和至少一个来源需启用。
+详情/配置界面提供历史、管理、黑名单、配置四个标签。侧栏项以 `self.plugin_name` 显示“自动订阅助手”，使用 `mdi-rss`，归入 `subscribe` 分组、要求 `admin` 权限，主入口为 `nav_key=main`。侧栏不显示配置标签与右上角关闭按钮。宿主聚合已启用插件的侧栏项；插件总开关和至少一个来源需启用。
 
-`AppPageBlacklist` 是独立联邦入口，透传属性到 `AppPage`；`AppPage` 复用 `Page` 并以订阅历史为初始视图。桌面侧栏固定页头、标签、统计与功能区，只让卡片列表滚动；`ProgressiveList` 观察列表底部并逐批加载，历史按每批 24 条请求后端，管理与黑名单逐批呈现前端筛选结果。切换筛选或刷新会重置加载范围，失败保留已加载内容并支持重试。详情弹窗与手机侧栏仍使用共享分页和移动端行数。黑名单与历史复用 `MediaCard`、`FilterPanel`、`styles/mediaViews.css`，筛选草稿只有在应用后才生效。
+`AppPage` 是侧栏主联邦入口；`AppPage` 复用 `Page` 并以订阅历史为初始视图。桌面侧栏固定页头、标签、统计与功能区，只让卡片列表滚动；`ProgressiveList` 观察列表底部并逐批加载，历史按每批 24 条请求后端，管理与黑名单逐批呈现前端筛选结果。切换筛选或刷新会重置加载范围，失败保留已加载内容并支持重试。详情弹窗与手机侧栏仍使用共享分页和移动端行数。黑名单与历史复用 `MediaCard`、`FilterPanel`、`styles/mediaViews.css`，筛选草稿只有在应用后才生效。
 
 订阅管理单卡操作通过 `moviepilot:subscriptionManager` 宿主入口复用原生编辑/活动弹窗、媒体路由及管理 API。宿主以订阅 ID 重新读取记录，权限和归属由主程序校验；插件只处理保存后的刷新，不把媒体快照或用户名作为授权依据。旧宿主缺少入口时保留原有暂停/恢复及取消订阅流程，并提示新增原生功能需要升级前端。
 
-所有插件路由声明见 `get_api()`；完整接口清单见[使用文档](../README.md#后端-api)。除 `DELETE /history` 为 `apikey` 外，其余均为 `bear`。批量管理须按 `ok_ids/failed_ids` 展示结果，不能只依据 `code=0` 清空全部选择。
+所有插件路由声明见 `api/routes.py` 的 `get_api()`；完整接口清单见[使用文档](../README.md#后端-api)。除 `DELETE /history` 为 `apikey` 外，其余均为 `bear`。批量管理须按 `ok_ids/failed_ids` 展示结果，不能只依据 `code=0` 清空全部选择。
 
 ## 仪表盘
 
@@ -179,3 +185,11 @@ Netflix TSV 按 UTF-8 解码，以换行符分行，避免特殊字符误断行�
 v3 后端回归位于 `tests/plugins.v3/automaticsubscriptionassistant/tests/`，在插件仓根目录使用可导入 MoviePilot v3 宿主的环境执行 `python -m pytest tests/plugins.v3/automaticsubscriptionassistant/tests -q`。测试引导使用临时配置与数据库。
 
 前端在 `frontend/` 执行 `npm test`、`npm run build`；行为测试运行实际组件脚本与 Vue 响应式逻辑，浏览器联调仍需真实宿主或明确标识的内存预览。前端入口与构建步骤见[前端说明](../frontend/README.md)。
+
+新增动画和音乐来源的查询、身份与匹配规则见[动画与音乐榜单](sources.md)。音乐元数据使用 `MetaMusic` / `MusicInfo`，使用同一订阅链但独立音乐身份空间，季号只用于剧集。
+
+规则来源使用 `options.rules`，在任何请求前按 FieldSpec 校验，显式空列表停止运行；不通过旧平铺字段回退拼装规则。候选合并保留全部命中来源与规则，过滤按同一规则内 AND、跨规则 OR 执行。缓存对象先复制再补充轨迹，避免规则名称污染缓存。单规则失败保留其它结果并统一报告失败，停止时不落地已收集候选。历史命中轨迹以现有 JSON 字段保存，无需新增数据库版本；补充轨迹不会覆盖成功状态、首次归属及时间。
+
+检测到旧平铺榜单/筛选配置且尚未保存新规则时，停止自动监听并要求重新设置；配置页显示空规则，防止把旧条件静默替换为默认规则。首次未配置的来源仍提供预设卡片。
+
+全部十源只暴露 `rule-list`，苹果、猫眼及奈飞地区榜按单条规则转换请求参数。前端移除地区/平台矩阵，规则管理弹窗保存独立草稿，应用时复核来源值未被外部替换。

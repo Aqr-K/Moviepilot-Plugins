@@ -18,8 +18,8 @@ from app.plugins.automaticsubscriptionassistant.core.config import GlobalConfig
 from app.plugins.automaticsubscriptionassistant.core.dedup import SubscribedIndex
 from app.plugins.automaticsubscriptionassistant.core.executor import SubscribeExecutor
 from app.plugins.automaticsubscriptionassistant.core.filters import FilterChain, build_filter_chain
-from app.plugins.automaticsubscriptionassistant.core.history import HistoryStore
-from app.plugins.automaticsubscriptionassistant.core.models import (
+from app.plugins.automaticsubscriptionassistant.services.history import HistoryStore
+from app.plugins.automaticsubscriptionassistant.schemas import (
     HistoryRecord,
     RankMediaItem,
     SubscribeStatus,
@@ -45,8 +45,11 @@ def _make_store(initial=None):
 
 
 def _make_ctx():
+    from app.plugins.automaticsubscriptionassistant.services.blacklist import BlacklistStore
+    history, _ = _make_store()
     return ProviderContext(chain=MagicMock(), downloadchain=MagicMock(),
-                           subscribechain=MagicMock(), logger=MagicMock())
+                           subscribechain=MagicMock(), logger=MagicMock(),
+                           blacklist=BlacklistStore(history._session_factory))
 
 
 def _mediainfo(mtype=MediaType.MOVIE, tmdb_id=438631, douban_id="123",

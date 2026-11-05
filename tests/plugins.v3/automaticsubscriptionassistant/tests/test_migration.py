@@ -1,18 +1,19 @@
-"""core/migration.py 单元测试：存量历史从插件 KV 搬进自有表。"""
+"""database/legacy.py 单元测试：存量历史从插件 KV 搬进自有表。"""
 from __future__ import annotations
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.plugins.automaticsubscriptionassistant.core.history import HISTORY_KEY, HistoryStore
-from app.plugins.automaticsubscriptionassistant.core.history import ensure_schema
-from app.plugins.automaticsubscriptionassistant.core.migration import (
+from app.plugins.automaticsubscriptionassistant.db.oper.history import HISTORY_KEY
+from app.plugins.automaticsubscriptionassistant.services.history import HistoryStore
+from app.plugins.automaticsubscriptionassistant.database.lifecycle import ensure_schema
+from app.plugins.automaticsubscriptionassistant.database.legacy import (
     BACKUP_KEY,
     MIGRATION_KEY,
     migrate_history_from_kv,
 )
-from app.plugins.automaticsubscriptionassistant.core.tables import SubscribeHistory
+from app.plugins.automaticsubscriptionassistant.db.models import SubscribeHistory
 
 
 def _store():

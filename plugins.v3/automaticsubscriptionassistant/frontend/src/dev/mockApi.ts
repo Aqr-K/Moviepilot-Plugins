@@ -1,3 +1,5 @@
+import providerSpecs from './providerSpecs.json'
+
 /**
  * 仅供本地开发壳（App.vue / yarn dev）预览三组件的内存 Mock API。
  *
@@ -6,6 +8,7 @@
  */
 
 interface Option {
+  group?: string
   title: string
   value: string
 }
@@ -18,8 +21,13 @@ interface FieldSpec {
   hint?: string
   advanced?: boolean
   options?: Option[]
-  columns?: Option[]
-  row_noun?: string
+  fields?: FieldSpec[]
+  presets?: Record<string, unknown>[]
+  minimum?: number
+  maximum?: number
+  required?: boolean
+  visible_when?: Record<string, unknown[]>
+  options_by?: { key: string, values: Record<string, Option[]> }
 }
 
 interface ProviderSpec {
@@ -45,6 +53,8 @@ interface HistoryRecord {
 }
 
 interface Subscribe {
+  provider: string
+  provider_name: string
   id: number
   name: string
   year: string
@@ -66,158 +76,7 @@ export interface MockApi {
   post(url: string, body?: Record<string, any>): Promise<unknown>
 }
 
-const PROVIDER_SPECS: ProviderSpec[] = [
-  {
-    provider_id: 'douban',
-    provider_name: '豆瓣榜单',
-    default_cron: '0 8 * * *',
-    options_schema: [
-      {
-        key: 'ranks', label: '内置榜单', kind: 'multi-select', default: ['movie-hot-gaia', 'tv-hot'],
-        hint: '选择要抓取的豆瓣内置榜单',
-        options: [
-          { title: '热门电影', value: 'movie-hot-gaia' },
-          { title: '热门电视剧', value: 'tv-hot' },
-          { title: '豆瓣 TOP250', value: 'movie-top250' },
-          { title: '近期热门综艺', value: 'show-hot' },
-        ],
-      },
-      { key: 'proxy', label: '使用代理抓取', kind: 'switch', default: false, hint: '抓取是否走系统代理' },
-      { key: 'rsshub_base', label: 'RSSHub 基址', kind: 'text', default: 'https://rsshub.app', advanced: true, hint: '被封锁时可改为自建实例' },
-      { key: 'rss_addrs', label: '自定义 RSS 地址', kind: 'textarea', default: '', advanced: true, hint: '每行一个完整 RSS 地址' },
-    ],
-    filters_schema: [
-      { key: 'vote', label: '评分 ≥', kind: 'float', default: 7.0, hint: '低于此评分的条目将被过滤，≤0 不启用' },
-      { key: 'year', label: '年份 ≥', kind: 'number', default: 2020, hint: '早于此年份的条目将被过滤，≤0 不启用' },
-      {
-        key: 'media_type', label: '媒体类型', kind: 'select', default: 'all',
-        options: [
-          { title: '全部', value: 'all' },
-          { title: '电影', value: 'movie' },
-          { title: '电视剧', value: 'tv' },
-        ],
-      },
-    ],
-  },
-  {
-    provider_id: 'maoyan',
-    provider_name: '猫眼榜单',
-    default_cron: '0 9 * * *',
-    notice: '网络电影因数据源已停更（优酷停于 2022、爱奇艺停于 2026-01），暂不支持，已移除。',
-    options_schema: [
-      { key: 'movie_box', label: '电影票房榜', kind: 'switch', default: true },
-      {
-        key: 'web_platform_map', label: '网播热度 平台 × 类型', kind: 'region-media-map', default: { all: ['tv'] },
-        row_noun: 'platform',
-        hint: '按平台分别选择要监听的网播类型（可各不相同）；网络电影仅腾讯视频/爱奇艺/优酷有数据',
-        options: [
-          { title: '全网', value: 'all' }, { title: '腾讯视频', value: 'tx' },
-          { title: '爱奇艺', value: 'iqiyi' }, { title: '优酷', value: 'youku' },
-          { title: '乐视', value: 'letv' }, { title: '芒果TV', value: 'mgtv' },
-          { title: 'PPTV', value: 'pptv' }, { title: '搜狐', value: 'sohu' },
-        ],
-        columns: [
-          { title: '电视剧+网络剧', value: 'series' }, { title: '电视剧', value: 'tv' },
-          { title: '网络剧', value: 'web' }, { title: '综艺', value: 'variety' },
-        ],
-      },
-      { key: 'num', label: '每榜条数', kind: 'number', default: 10 },
-      { key: 'proxy', label: '使用代理访问', kind: 'switch', default: false },
-    ],
-    filters_schema: [
-      { key: 'year', label: '年份 ≥', kind: 'number', default: 0 },
-      {
-        key: 'media_type', label: '媒体类型', kind: 'select', default: 'all',
-        options: [{ title: '全部', value: 'all' }, { title: '电影', value: 'movie' }, { title: '电视剧', value: 'tv' }],
-      },
-    ],
-  },
-  {
-    provider_id: 'popular',
-    provider_name: '热门媒体',
-    default_cron: '5 1 * * *',
-    options_schema: [
-      { key: 'movie_enabled', label: '电影订阅', kind: 'switch', default: true },
-      {
-        key: 'movie_genres', label: '电影风格', kind: 'multi-select', default: [],
-        hint: '留空=全部；仅开启电影订阅时生效',
-        options: [{ title: '动画', value: '16' }, { title: '动作', value: '28' }, { title: '科幻', value: '878' }, { title: '悬疑', value: '9648' }],
-      },
-      { key: 'movie_page_cnt', label: '电影获取条数', kind: 'number', default: 30 },
-      { key: 'movie_min_rating', label: '电影评分下限(≥)', kind: 'float', default: 0, hint: '0=不限' },
-      { key: 'movie_popularity', label: '电影订阅人次(≥)', kind: 'number', default: 0, hint: '0=不限' },
-      { key: 'tv_enabled', label: '剧集订阅', kind: 'switch', default: true },
-      {
-        key: 'tv_genres', label: '剧集风格', kind: 'multi-select', default: [],
-        hint: '留空=全部；仅开启剧集订阅时生效',
-        options: [{ title: '动画', value: '16' }, { title: '悬疑', value: '9648' }, { title: '真人秀', value: '10764' }, { title: '科幻奇幻', value: '10765' }],
-      },
-      { key: 'tv_page_cnt', label: '剧集获取条数', kind: 'number', default: 30 },
-      { key: 'tv_min_rating', label: '剧集评分下限(≥)', kind: 'float', default: 0, hint: '0=不限' },
-      { key: 'tv_popularity', label: '剧集订阅人次(≥)', kind: 'number', default: 0, hint: '0=不限' },
-    ],
-    filters_schema: [],
-  },
-  {
-    provider_id: 'mikan',
-    provider_name: 'Mikan 季度新番',
-    default_cron: '0 10 * * 1',
-    options_schema: [
-      { key: 'year', label: '年份', kind: 'number', default: 0, hint: '0 取当前年' },
-      {
-        key: 'season', label: '季度', kind: 'select', default: '当前',
-        options: [
-          { title: '当前', value: '当前' }, { title: '春', value: '春' },
-          { title: '夏', value: '夏' }, { title: '秋', value: '秋' }, { title: '冬', value: '冬' },
-        ],
-      },
-      { key: 'resolve_bangumi_id', label: '补全 bgm.tv id', kind: 'switch', default: true, hint: '更准但更慢（每条约 0.6s）' },
-      { key: 'proxy', label: '使用代理访问', kind: 'switch', default: false },
-    ],
-    filters_schema: [
-      { key: 'year', label: '年份 ≥', kind: 'number', default: 0 },
-    ],
-  },
-  {
-    provider_id: 'netflix',
-    provider_name: '奈飞榜单',
-    default_cron: '0 11 * * 3',
-    options_schema: [
-      { key: 'global', label: '抓取全球榜', kind: 'switch', default: true },
-      {
-        key: 'global_dataset', label: '全球数据源', kind: 'select', default: 'all-weeks-global',
-        options: [{ title: '最新周榜', value: 'all-weeks-global' }, { title: '史上最热', value: 'most-popular' }],
-      },
-      {
-        key: 'global_media_types', label: '全球榜类别', kind: 'multi-select',
-        default: ['Films (English)', 'Films (Non-English)', 'TV (English)', 'TV (Non-English)'],
-        options: [
-          { title: '英语电影', value: 'Films (English)' },
-          { title: '非英语电影', value: 'Films (Non-English)' },
-          { title: '英语剧集', value: 'TV (English)' },
-          { title: '非英语剧集', value: 'TV (Non-English)' },
-        ],
-      },
-      {
-        key: 'country_selections', label: '国家/地区 × 媒体类型', kind: 'region-media-map', default: {},
-        hint: '按地区分别选择要监听的媒体类型（可各不相同）',
-        options: [
-          { title: '美国', value: 'US' }, { title: '日本', value: 'JP' },
-          { title: '韩国', value: 'KR' }, { title: '中国台湾', value: 'TW' },
-        ],
-        columns: [
-          { title: '电影', value: 'Films' }, { title: '剧集', value: 'TV' },
-        ],
-      },
-      { key: 'limit', label: '每榜取前 N', kind: 'number', default: 10 },
-      { key: 'proxy', label: '使用代理', kind: 'switch', default: false },
-      { key: 'rich_metadata', label: '富元数据模式', kind: 'switch', default: false, hint: '带年份+干净剧名，识别更准' },
-      { key: 'max_workers', label: '并发线程数', kind: 'number', default: 5, advanced: true, hint: '富元数据模式下多榜并发数' },
-      { key: 'use_cache', label: '周更缓存', kind: 'switch', default: true, advanced: true, hint: '避免同周重复抓取触发风控' },
-    ],
-    filters_schema: [],
-  },
-]
+const PROVIDER_SPECS: ProviderSpec[] = providerSpecs as ProviderSpec[]
 
 const POSTERS: string[] = Array.from({ length: 18 }, (_, i) => `https://picsum.photos/seed/asa${i + 1}/240/360`)
 const TITLES: Array<[string, string, string]> = [
@@ -273,6 +132,8 @@ function buildSubs(count: number): Subscribe[] {
     const [title, year, type] = TITLES[i % TITLES.length]
     out.push({
       id: i + 1,
+      provider: PROVIDER_SPECS[i % PROVIDER_SPECS.length].provider_id,
+      provider_name: PROVIDER_SPECS[i % PROVIDER_SPECS.length].provider_name,
       name: `${title}${i >= TITLES.length ? ' ' + (Math.floor(i / TITLES.length) + 1) : ''}`,
       year, type,
       state: SUB_STATES[i % SUB_STATES.length],
@@ -324,6 +185,7 @@ function parseQuery(url: string): Record<string, string> {
 // 开发壳用轻量本地化（镜像后端 core/i18n 的思路：源中文串 -> 译文）。
 // 仅覆盖 mock spec 里出现的串，够开发壳 en/zh-TW 截图连贯即可。
 const TEXT: Record<string, Record<string, string>> = {
+  苹果音乐榜单: { 'zh-TW': '蘋果音樂榜單', 'en-US': 'Apple Music Charts' },
   豆瓣榜单: { 'zh-TW': '豆瓣榜單', 'en-US': 'Douban Rankings' },
   猫眼榜单: { 'zh-TW': '貓眼榜單', 'en-US': 'Maoyan Rankings' },
   热门媒体: { 'zh-TW': '熱門媒體', 'en-US': 'Popular Media' },
@@ -401,8 +263,9 @@ function localizeSpec(spec: ProviderSpec, lang: string): ProviderSpec {
   const loc = (f: FieldSpec): FieldSpec => ({
     ...f,
     label: _L(f.label, lang),
+    fields: f.fields?.map(loc),
+    presets: f.presets?.map(p => ({ ...p, name: _L(String(p.name || ''), lang) })),
     options: f.options ? f.options.map(o => ({ ...o, title: _L(o.title, lang) })) : f.options,
-    columns: f.columns ? f.columns.map(c => ({ ...c, title: _L(c.title, lang) })) : f.columns,
   })
   return {
     ...spec,

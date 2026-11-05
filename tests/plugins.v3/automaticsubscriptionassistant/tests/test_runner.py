@@ -12,8 +12,8 @@ from app.schemas.types import MediaSource, MediaType
 from app.sdk.media import MediaInfo
 
 from app.plugins.automaticsubscriptionassistant.core.config import GlobalConfig, ProviderConfig
-from app.plugins.automaticsubscriptionassistant.core.history import HistoryStore
-from app.plugins.automaticsubscriptionassistant.core.models import (
+from app.plugins.automaticsubscriptionassistant.services.history import HistoryStore
+from app.plugins.automaticsubscriptionassistant.schemas import (
     FieldSpec,
     HistoryRecord,
     ProviderSpec,
@@ -59,7 +59,9 @@ def _store(initial=None):
 
 
 def _movie_ctx(event=None):
-    ctx = ProviderContext(MagicMock(), MagicMock(), MagicMock(), MagicMock(), event=event)
+    from test_executor import _make_ctx
+    ctx = _make_ctx()
+    ctx.event = event
 
     def _recognize(*args, **kwargs):
         # 按识别请求的 media_id 返回对应 mediainfo，使不同条目身份键相异（贴近真实）。
@@ -130,7 +132,8 @@ def test_runner_respects_exit_event():
 
 def test_runner_reports_source_error():
     errors = []
-    ctx = ProviderContext(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    from test_executor import _make_ctx
+    ctx = _make_ctx()
     prov = _FakeErrorProvider([])
     store, _ = _store()
     runner = ProviderRunner(ctx, GlobalConfig({}), store,
@@ -142,7 +145,8 @@ def test_runner_reports_source_error():
 
 
 def test_runner_error_callback_failure_is_swallowed():
-    ctx = ProviderContext(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    from test_executor import _make_ctx
+    ctx = _make_ctx()
     prov = _FakeErrorProvider([])
     store, _ = _store()
 

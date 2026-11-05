@@ -93,7 +93,7 @@ def test_mikan_fetch_with_bangumi_id(monkeypatch):
     monkeypatch.setattr(RequestUtils, "get_res", _fake_get_res)
     monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)  # 免真实等待
 
-    items = list(MikanRankProvider().fetch(
+    items = list(MikanRankProvider()._fetch_options(
         {"year": 2026, "season": "春", "resolve_bangumi_id": True}, None))
     assert len(items) == 2
     by_title = {i.title: i for i in items}
@@ -132,7 +132,7 @@ def test_mikan_fetch_without_resolve_skips_detail(monkeypatch):
     monkeypatch.setattr(RequestUtils, "get_res", _spy)
     monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)
 
-    items = list(MikanRankProvider().fetch(
+    items = list(MikanRankProvider()._fetch_options(
         {"year": 2026, "season": "春", "resolve_bangumi_id": False}, None))
     assert len(items) == 2
     assert all(i.bangumi_id is None for i in items)
@@ -159,7 +159,7 @@ def test_mikan_fetch_proxy_reaches_requests(monkeypatch):
     monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(mikan_mod.settings, "PROXY_HOST", "http://127.0.0.1:1080")
 
-    list(MikanRankProvider().fetch(
+    list(MikanRankProvider()._fetch_options(
         {"year": 2026, "season": "春", "resolve_bangumi_id": True, "proxy": True}, None))
 
     expected = {"http": "http://127.0.0.1:1080", "https": "http://127.0.0.1:1080"}
@@ -170,7 +170,7 @@ def test_mikan_fetch_proxy_reaches_requests(monkeypatch):
 def test_mikan_empty_response_yields_nothing(monkeypatch):
     """季度页无返回时产出空。"""
     monkeypatch.setattr(RequestUtils, "get_res", lambda self, url, *a, **k: None)
-    items = list(MikanRankProvider().fetch({"year": 2026, "season": "夏"}, None))
+    items = list(MikanRankProvider()._fetch_options({"year": 2026, "season": "夏"}, None))
     assert items == []
 
 
@@ -229,7 +229,7 @@ def test_mikan_regression_from_fixtures(monkeypatch):
     monkeypatch.setattr(RequestUtils, "get_res", _fixture_get_res)
     monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)
 
-    items = list(MikanRankProvider().fetch(
+    items = list(MikanRankProvider()._fetch_options(
         {"year": 2026, "season": "春", "resolve_bangumi_id": True}, None))
     by_id = {i.source_meta["mikan_id"]: i for i in items}
     assert set(by_id) == {"227", "3899", "3904"}
@@ -388,7 +388,7 @@ def test_mikan_detail_failure_degrades_in_fetch(monkeypatch):
     monkeypatch.setattr(RequestUtils, "get_res", _get_res)
     monkeypatch.setattr(mikan_mod, "sleep", lambda *_a, **_k: None)
 
-    items = list(MikanRankProvider().fetch(
+    items = list(MikanRankProvider()._fetch_options(
         {"year": 2030, "season": "春", "resolve_bangumi_id": True}, None))
     assert len(items) == 1
     assert items[0].bangumi_id is None
@@ -434,9 +434,9 @@ def test_mikan_spec_shape():
     spec = MikanRankProvider().get_spec()
     assert spec.provider_id == "mikan"
     assert spec.default_cron == "0 10 * * 1"
-    season_field = next(f for f in spec.options_schema if f.key == "season")
-    values = [o["value"] for o in season_field.options]
-    assert mikan_mod.SEASON_AUTO in values
-    for s in mikan_mod.MIKAN_SEASONS:
-        assert s in values
-    assert [f.key for f in spec.filters_schema] == ["year"]
+    rules = spec.options_schema[0]
+    assert rules.kind == 'rule-list'
+    fields = {f.key:f for f in rules.fields}
+    assert {o['value'] for o in fields['time'].options} == {'current','previous','next','fixed'}
+    assert {o['value'] for o in fields['season'].options} == set(mikan_mod.MIKAN_SEASONS)
+    assert spec.filters_schema == []

@@ -6,18 +6,15 @@
 本文件仅负责与 MoviePilot 插件框架对接（元数据、配置装载、定时服务注册、
 API 端点），真正的抓取 / 过滤 / 落地逻辑均在 ``core`` 与 ``providers`` 中实现。
 """
+
 from datetime import datetime, timedelta
 from threading import Event, Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-
 from app.chain.download import DownloadChain
 from app.chain.subscribe import SubscribeChain
 from app.db.oper.subscribe import SubscribeOper
-from app.schemas.event import ConfigChangeEventData
 from app.schemas.types import EventType, MediaType
 from app.sdk.config import settings
 from app.sdk.events import eventmanager
@@ -25,22 +22,31 @@ from app.sdk.logging import logger
 from app.sdk.media import MetaInfo
 from app.sdk.plugin import _PluginBase
 from app.sdk.scheduler import update_plugin_job
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
+from .api.blacklist import BlacklistApiMixin
+from .api.configuration import ConfigurationApiMixin
+from .api.history import HistoryApiMixin
+from .api.overview import OverviewApiMixin
+from .api.providers import ProvidersApiMixin
+from .api.routes import RoutesApiMixin
+from .api.subscriptions import SubscriptionsApiMixin
 from .core.config import PluginSettings, ProviderConfig, build_defaults
 from .core.dedup import SubscribedIndex, build_subscribed_index
-from .core.blacklist import BlacklistApiMixin, media_snapshot
-from .core.executor import SubscribeExecutor
-from .core.filters import build_filter_chain
-from .core.history import HistoryStore
-from .core.i18n import localize_provider_name, localize_spec
-from .core.migration import migrate_history_from_kv
-from .core.models import RankMediaItem
 from .core.provider import ProviderContext
 from .core.registry import registry
 from .core.runner import ProviderRunner
 from .core.subscribes import SubscribeManager, list_subscriptions
-from .core.supplement import HistorySupplementService
-from .core.tables import MODELS
+from .database.backup import DatabaseBackup
+from .database.blacklist import migrate_blacklist_from_kv
+from .database.legacy import migrate_history_from_kv
+from .database.lifecycle import MIGRATIONS, ensure_schema
+from .db.models import MODELS
+from .schemas.blacklist import media_snapshot
+from .services.blacklist import BLACKLIST_LOCK, BlacklistStore
+from .services.history import HistoryStore
+from .services.notifications import format_run_result
 
 # 导入 providers 包会触发各来源类的 @register 注册。providers 由并行流程提供，
 # 未就绪或单个来源导入异常时不应影响插件本体加载，故此处包裹兜底。
@@ -50,17 +56,26 @@ except Exception as _exc:  # noqa: BLE001
     logger.error(f"自动订阅助手：来源模块加载失败，暂无可用来源: {_exc}")
 
 
-class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
+class AutomaticSubscriptionAssistant(
+    RoutesApiMixin,
+    ConfigurationApiMixin,
+    HistoryApiMixin,
+    OverviewApiMixin,
+    ProvidersApiMixin,
+    SubscriptionsApiMixin,
+    BlacklistApiMixin,
+    _PluginBase,
+):
     """多来源榜单自动订阅助手（Vue 联邦渲染）。"""
 
     # 插件名称
     plugin_name = "自动订阅助手"
     # 插件描述
-    plugin_desc = "统一聚合豆瓣榜单/猫眼榜单/热门媒体等来源，可组合过滤后自动订阅。"
+    plugin_desc = "聚合影视、动画及音乐榜单，按来源独立调度、过滤和通知，支持历史、黑名单与自动订阅。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.3.0"
+    plugin_version = "3.4.0"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -75,6 +90,8 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     def __init__(self):
         super().__init__()
         # 运行期状态（真正的赋值在 init_plugin 中完成）。
+        self._database_ready = False
+        self._database_error = "数据库尚未初始化"
         self._enabled: bool = False
         self._config: Dict[str, Any] = {}
         self._settings: PluginSettings = PluginSettings({})
@@ -113,36 +130,65 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         onlyonce = gcfg.onlyonce
         clear = gcfg.clear
 
-        # 存量历史从插件 KV 搬进自有表，只在还有存量时真的执行。
+        # 宿主在 init_plugin 之后才运行迁移；读取去重/忽略规则前必须先准备好库。
+        self._database_ready = False
+        self._database_error = ""
         try:
-            migrate_history_from_kv(self.__history_store(), self.get_data,
-                                    self.save_data, self.del_data, logger)
-        except Exception as exc:  # noqa: BLE001 - 迁移失败不阻断插件启动，存量原样保留
-            logger.error(f"{self.plugin_name}：历史记录迁移失败，存量已保留: {exc}")
+            with BLACKLIST_LOCK:
+                handle = self.get_database()
+                backup = DatabaseBackup(
+                    handle.engine,
+                    handle.plugin_id,
+                    self.get_data_path() / "database-backups",
+                )
+                backup.before_upgrade()
+                ensure_schema(handle.engine)
+                result = migrate_history_from_kv(
+                    self._history_store(),
+                    self.get_data,
+                    self.save_data,
+                    self.del_data,
+                    logger,
+                )
+                if result.error:
+                    raise RuntimeError(result.summary())
+                migrate_blacklist_from_kv(
+                    handle.session, self.get_data, self.save_data, self.del_data
+                )
+            self._database_ready = True
+        except Exception as exc:  # noqa: BLE001 - 数据未准备好时禁止调度或复位一次性开关
+            self._database_error = str(exc)
+            self._event.set()
+            logger.error(f"{self.plugin_name}：数据库初始化失败，自动任务已停止: {exc}")
+            return
 
         # 清空历史（一次性）。
         if clear:
             try:
-                self.__history_store().clear()
+                self._history_store().clear()
                 logger.info(f"{self.plugin_name}：已清空全部历史记录")
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"{self.plugin_name}：清空历史失败: {exc}")
 
         # 立即运行一次（一次性）：3 秒后 date 任务跑所有启用来源。
         if onlyonce:
-            logger.info(f"{self.plugin_name}：立即运行一次，将在 3 秒后执行所有启用来源")
-            self.__schedule_once(self.__run_enabled_once)
+            logger.info(
+                f"{self.plugin_name}：立即运行一次，将在 3 秒后执行所有启用来源"
+            )
+            self._schedule_once(self._run_enabled_once)
 
         # 复位一次性开关并持久化，避免下次加载重复触发。
         if onlyonce or clear:
-            self.__reset_oneshot_flags(reset_onlyonce=onlyonce, reset_clear=clear)
+            self._reset_oneshot_flags(reset_onlyonce=onlyonce, reset_clear=clear)
 
     def get_state(self) -> bool:
         """插件是否处于生效状态：总开关开启且至少一个来源启用。"""
         gcfg = self._settings.global_config
-        if not gcfg.enabled:
+        if not self._database_ready or not gcfg.enabled:
             return False
-        return any(self.__provider_config(provider).enabled for provider in self._providers)
+        return any(
+            self._provider_config(provider).enabled for provider in self._providers
+        )
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -150,10 +196,18 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         return []
 
     def get_database_models(self) -> List[type]:
-        """声明插件自有表：订阅历史。"""
+        """声明插件自有的历史、成功账本、黑名单与迁移状态表。"""
         return list(MODELS)
 
-    def __history_store(self) -> HistoryStore:
+    def get_database_migrations(self):
+        """向宿主声明完整迁移树；禁止由 create_all 代替版本升级。"""
+        return MIGRATIONS
+
+    def blacklist_store(self):
+        """生产忽略规则只读写当前插件实例的 SQL 库。"""
+        return BlacklistStore(self.get_database().session)
+
+    def _history_store(self) -> HistoryStore:
         """构造绑定插件自有库的历史仓库。"""
         return HistoryStore(self.get_database().session)
 
@@ -168,9 +222,17 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         return None, defaults
 
     def get_sidebar_nav(self):
-        """以插件名称和订阅图标显示侧栏入口，默认进入订阅历史。"""
-        return [{"nav_key": "blacklist", "title": self.plugin_name, "icon": "mdi-rss",
-                 "section": "subscribe", "permission": "subscribe", "order": 30}]
+        """仅向管理员显示插件侧栏入口，默认进入订阅历史。"""
+        return [
+            {
+                "nav_key": "main",
+                "title": self.plugin_name,
+                "icon": "mdi-rss",
+                "section": "subscribe",
+                "permission": "admin",
+                "order": 30,
+            }
+        ]
 
     def get_page(self) -> Optional[List[dict]]:
         """Vue 模式无需 Vuetify 详情页，历史由前端 Page 组件经 API 渲染。"""
@@ -200,7 +262,7 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     def get_service(self) -> List[Dict[str, Any]]:
         """为每个启用且 cron 合法的来源注册独立的 cron 定时服务。"""
         services: List[Dict[str, Any]] = []
-        if not self._settings.global_config.enabled:
+        if not self._database_ready or not self._settings.global_config.enabled:
             return services
         for provider in self._providers:
             spec = provider.get_spec()
@@ -213,29 +275,39 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
             try:
                 trigger = CronTrigger.from_crontab(cron)
             except Exception as exc:  # noqa: BLE001 - cron 非法则跳过该源
-                logger.error(f"{spec.provider_name} 的 cron 表达式非法（{cron}）: {exc}")
-                self.systemmessage.put(
-                    f"{spec.provider_name} 的定时表达式非法：{cron}", title=self.plugin_name)
+                logger.error(
+                    f"{spec.provider_name} 的 cron 表达式非法（{cron}）: {exc}"
+                )
+                if pconf.notify:
+                    self.systemmessage.put(
+                        f"{spec.provider_name} 的定时表达式非法：{cron}",
+                        title=self.plugin_name,
+                    )
                 continue
-            services.append({
-                "id": f"{self.plugin_config_prefix}{spec.provider_id}",
-                "name": f"{spec.provider_name}订阅",
-                "trigger": trigger,
-                "func": self.run_provider,
-                "func_kwargs": {"provider_id": spec.provider_id},
-            })
+            services.append(
+                {
+                    "id": f"{self.plugin_config_prefix}{spec.provider_id}",
+                    "name": f"{spec.provider_name}订阅",
+                    "trigger": trigger,
+                    "func": self.run_provider,
+                    "func_kwargs": {"provider_id": spec.provider_id},
+                }
+            )
         return services
 
     def stop_service(self):
         """置退出信号并关闭调度器。
 
-        关闭不等待在途任务：``stop_service`` 经 ``init_plugin`` 同步跑在保存配置的请求
+        退出信号与最后的订阅提交共用锁，避免停止后继续添加。
+        关闭不等待在途抓取任务：``stop_service`` 经 ``init_plugin`` 同步跑在保存配置的请求
         线程上，而一次性任务可能正卡在几分钟的抓取里。在途任务已经通过上面 set 的退出
         信号被要求收尾，无须再阻塞调用方等它跑完。
         """
+        self._database_ready = False
         try:
-            if self._event:
-                self._event.set()
+            with BLACKLIST_LOCK:
+                if self._event:
+                    self._event.set()
             if self._scheduler:
                 self._scheduler.remove_all_jobs()
                 if self._scheduler.running:
@@ -247,12 +319,17 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     # ------------------------------------------------------------------ #
     # 运行
     # ------------------------------------------------------------------ #
-    def run_provider(self, provider_id: str, subscribed_index: Optional[SubscribedIndex] = None):
+    def run_provider(
+        self, provider_id: str, subscribed_index: Optional[SubscribedIndex] = None
+    ):
         """执行单个来源：装配上下文 + 历史 + Runner 并运行，整源异常兜底提示。
 
         ``subscribed_index`` 为已订阅强标识索引（识别前预去重快速路径）；
         由「运行全部」传入以在多来源间共享（跨渠道去重），单来源手动运行则自建预加载索引。
         """
+        if not self._database_ready or self._event.is_set():
+            logger.warning(f"{self.plugin_name}：数据库未就绪或插件已停止，本次不运行")
+            return
         provider = registry.get(provider_id)
         if provider is None:
             logger.error(f"{self.plugin_name}：未知来源 {provider_id}")
@@ -263,7 +340,7 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         proxy = bool(pconf.option("proxy"))
         # 单来源手动运行：自建预加载索引（仍与已订阅去重）。
         if subscribed_index is None:
-            subscribed_index = self.__build_subscribed_index()
+            subscribed_index = self._build_subscribed_index()
 
         context = ProviderContext(
             chain=self.chain,
@@ -275,28 +352,40 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
             # 注入插件 KV 读写，供 provider 持久化缓存（如奈飞两级缓存的 L2，抗重启）。
             get_data=self.get_data,
             save_data=self.save_data,
+            blacklist=self.blacklist_store(),
         )
-        history = self.__history_store()
+        history = self._history_store()
+        errors = []
+        stats = {}
         runner = ProviderRunner(
-            context, self._settings.global_config, history,
-            on_error=self.__on_provider_error,
-            on_progress=lambda n: self.__run_progress(provider_id, n),
-            subscribed_index=subscribed_index)
-        self.__run_start(provider_id, spec.provider_name)
+            context,
+            self._settings.global_config,
+            history,
+            on_error=lambda _provider, error: errors.append(str(error)),
+            on_progress=lambda n: self._run_progress(provider_id, n),
+            subscribed_index=subscribed_index,
+        )
+        self._run_start(provider_id, spec.provider_name)
         try:
             stats = runner.run(provider, pconf)
             logger.info(f"{spec.provider_name} 运行完成，统计: {stats}")
-            if self._settings.global_config.notify and stats:
-                summary = "，".join(f"{k}:{v}" for k, v in stats.items())
-                self.systemmessage.put(
-                    f"{spec.provider_name} 运行完成（{summary}）", title=self.plugin_name)
         except Exception as exc:  # noqa: BLE001 - 整源兜底
+            errors.append(str(exc))
             logger.error(f"{spec.provider_name} 运行失败: {exc}")
-            self.systemmessage.put(f"{spec.provider_name}运行失败: {exc}", title=self.plugin_name)
         finally:
-            self.__run_end(provider_id)
+            self._run_end(provider_id)
+            if pconf.notify and not context.event.is_set():
+                try:
+                    self.systemmessage.put(
+                        format_run_result(
+                            spec.provider_name, stats, errors[-1] if errors else None
+                        ),
+                        title=self.plugin_name,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 通知失败不改变本轮运行结果
+                    logger.warning(f"{spec.provider_name} 运行通知发送失败: {exc}")
 
-    def __run_enabled_once(self):
+    def _run_enabled_once(self):
         """立即运行：依次执行所有启用来源，结束后复位 onlyonce。
 
         构建**一个**已订阅索引贯穿所有来源，实现跨渠道去重（一个媒体在任一来源订阅后，
@@ -306,16 +395,16 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         # 循环都重读实例属性，重载恰好发生在两个来源之间时，这里会读到那个尚未置位的新
         # 信号，本轮就再也停不下来了。
         event = self._event
-        subscribed_index = self.__build_subscribed_index()
+        subscribed_index = self._build_subscribed_index()
         for provider in self._providers:
             if event is not None and event.is_set():
                 break
-            if not self.__provider_config(provider).enabled:
+            if not self._provider_config(provider).enabled:
                 continue
             self.run_provider(provider.provider_id, subscribed_index=subscribed_index)
-        self.__reset_oneshot_flags(reset_onlyonce=True, reset_clear=False)
+        self._reset_oneshot_flags(reset_onlyonce=True, reset_clear=False)
 
-    def __build_subscribed_index(self) -> SubscribedIndex:
+    def _build_subscribed_index(self) -> SubscribedIndex:
         """
         通过官方查询 SDK 预加载当前全部订阅的强标识索引。
 
@@ -324,39 +413,37 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         try:
             subscriptions = list_subscriptions()
             index = build_subscribed_index(subscriptions)
-            logger.info(f"{self.plugin_name}：预加载已订阅 {len(subscriptions or [])} 条用于预去重")
+            logger.info(
+                f"{self.plugin_name}：预加载已订阅 {len(subscriptions or [])} 条用于预去重"
+            )
             return index
         except Exception as exc:  # noqa: BLE001 - 预加载失败不应阻断运行，退化为无快速路径
-            logger.warning(f"{self.plugin_name}：预加载已订阅失败，本轮跳过预去重快速路径: {exc}")
+            logger.warning(
+                f"{self.plugin_name}：预加载已订阅失败，本轮跳过预去重快速路径: {exc}"
+            )
             return SubscribedIndex()
-
-    def __on_provider_error(self, provider, error: Exception):
-        """Runner 整源失败回调：系统 toast 提示。"""
-        try:
-            self.systemmessage.put(
-                f"{provider.provider_name}运行失败: {error}", title=self.plugin_name)
-        except Exception:  # noqa: BLE001 - 回调不得影响主流程
-            pass
 
     # ------------------------------------------------------------------ #
     # 运行态（供概览「处理中」实时展示；多来源可能并发，锁保护）
     # ------------------------------------------------------------------ #
-    def __run_start(self, provider_id: str, name: str) -> None:
+    def _run_start(self, provider_id: str, name: str) -> None:
         """标记某来源开始运行（processed 归零）。"""
         with self._run_lock:
             self._run_state[provider_id] = {
-                "provider_id": provider_id, "name": name, "processed": 0,
+                "provider_id": provider_id,
+                "name": name,
+                "processed": 0,
                 "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
-    def __run_progress(self, provider_id: str, processed: int) -> None:
+    def _run_progress(self, provider_id: str, processed: int) -> None:
         """更新某来源已处理条数。"""
         with self._run_lock:
             st = self._run_state.get(provider_id)
             if st is not None:
                 st["processed"] = processed
 
-    def __run_end(self, provider_id: str) -> None:
+    def _run_end(self, provider_id: str) -> None:
         """某来源运行结束，移出运行态。"""
         with self._run_lock:
             self._run_state.pop(provider_id, None)
@@ -364,7 +451,7 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
     # ------------------------------------------------------------------ #
     # 调度与配置辅助
     # ------------------------------------------------------------------ #
-    def __schedule_once(self, func, **kwargs):
+    def _schedule_once(self, func, **kwargs):
         """3 秒后触发一次 date 任务（懒创建 BackgroundScheduler）。
 
         同一目标的重复触发按 ``job_id`` 合并：连点「立即运行」或重复调 /run 时，
@@ -373,21 +460,32 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         try:
             if not self._scheduler:
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-            run_date = datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3)
-            job_id = f"{self.plugin_config_prefix}once_{getattr(func, '__name__', 'task')}"
+            run_date = datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(
+                seconds=3
+            )
+            job_id = (
+                f"{self.plugin_config_prefix}once_{getattr(func, '__name__', 'task')}"
+            )
             provider_id = (kwargs or {}).get("provider_id")
             if provider_id:
                 job_id = f"{job_id}_{provider_id}"
-            self._scheduler.add_job(func=func, trigger="date", run_date=run_date,
-                                    kwargs=kwargs or {}, id=job_id,
-                                    replace_existing=True, max_instances=1,
-                                    coalesce=True, misfire_grace_time=60)
+            self._scheduler.add_job(
+                func=func,
+                trigger="date",
+                run_date=run_date,
+                kwargs=kwargs or {},
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=60,
+            )
             if not self._scheduler.running:
                 self._scheduler.start()
         except Exception as exc:  # noqa: BLE001
             logger.error(f"{self.plugin_name}：调度一次性任务失败: {exc}")
 
-    def __reset_oneshot_flags(self, reset_onlyonce: bool, reset_clear: bool):
+    def _reset_oneshot_flags(self, reset_onlyonce: bool, reset_clear: bool):
         """复位 onlyonce / clear 并持久化，读取最新配置避免并发覆盖。"""
         try:
             cfg = dict(self.get_config() or self._config or {})
@@ -403,447 +501,25 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
         except Exception as exc:  # noqa: BLE001
             logger.error(f"{self.plugin_name}：复位一次性开关失败: {exc}")
 
-    def __provider_config(self, provider) -> ProviderConfig:
+    def _provider_config(self, provider) -> ProviderConfig:
         """构造某来源的 ProviderConfig（带 spec 默认回退）。"""
         spec = provider.get_spec()
         return ProviderConfig(self._settings.provider_raw(spec.provider_id), spec)
-
-    # ------------------------------------------------------------------ #
-    # API
-    # ------------------------------------------------------------------ #
-    def get_api(self) -> List[Dict[str, Any]]:
-        """注册插件 API 端点（读取类走 bear，删除类可用 apikey）。"""
-        return [
-            {"path": "/history/supplement", "endpoint": self.api_history_supplement, "methods": ["POST"],
-             "auth": "bear", "summary": "补充编辑并添加订阅", "description": "手动补充媒体身份和订阅设置，重新识别后新增订阅"},
-            {"path": "/dashboard", "endpoint": self.api_dashboard, "methods": ["GET"],
-             "auth": "bear", "summary": "仪表盘概览", "description": "汇总当前订阅、黑名单、来源运行状态与最近订阅"},
-            {"path": "/blacklist", "endpoint": self.api_blacklist, "methods": ["GET"],
-             "auth": "bear", "summary": "黑名单", "description": "列出手动忽略的影视"},
-            {"path": "/blacklist/add", "endpoint": self.api_blacklist_add, "methods": ["POST"],
-             "auth": "bear", "summary": "加入黑名单", "description": "手动添加或从历史/订阅添加"},
-            {"path": "/blacklist/delete", "endpoint": self.api_blacklist_delete, "methods": ["POST"],
-             "auth": "bear", "summary": "移除黑名单", "description": "移除选中的忽略规则"},
-            {"path": "/subscribes/block", "endpoint": self.api_subscribes_block, "methods": ["POST"],
-             "auth": "bear", "summary": "退订并忽略", "description": "保存黑名单后退订，防止自动重建"},
-            {
-                "path": "/providers", "endpoint": self.api_providers, "methods": ["GET"],
-                "auth": "bear", "summary": "来源列表", "description": "返回所有来源的元描述 spec",
-            },
-            {
-                "path": "/config", "endpoint": self.api_get_config, "methods": ["GET"],
-                "auth": "bear", "summary": "读取配置", "description": "返回当前配置（缺省时返回反射默认）",
-            },
-            {
-                "path": "/config", "endpoint": self.api_save_config, "methods": ["POST"],
-                "auth": "bear", "summary": "保存配置", "description": "保存完整配置并重载调度",
-            },
-            {
-                "path": "/history", "endpoint": self.api_history, "methods": ["GET"],
-                "auth": "bear", "summary": "历史记录", "description": "按来源/状态过滤并分页查询历史",
-            },
-            {
-                "path": "/history/uniques", "endpoint": self.api_history_uniques, "methods": ["GET"],
-                "auth": "bear", "summary": "历史身份键", "description": "按当前筛选条件返回全部历史的身份键，供全选",
-            },
-            {
-                "path": "/history", "endpoint": self.api_delete_history, "methods": ["DELETE"],
-                "auth": "apikey", "summary": "删除历史", "description": "按 unique 删除一条历史（apikey 鉴权）",
-            },
-            {
-                "path": "/history/delete", "endpoint": self.api_delete_history_post, "methods": ["POST"],
-                "auth": "bear", "summary": "删除历史（前端）", "description": "按 unique 删除一条历史（前端调用）",
-            },
-            {
-                "path": "/status", "endpoint": self.api_status, "methods": ["GET"],
-                "auth": "bear", "summary": "运行状态", "description": "各来源启用状态与历史统计",
-            },
-            {
-                "path": "/run", "endpoint": self.api_run, "methods": ["POST"],
-                "auth": "bear", "summary": "立即运行", "description": "触发指定来源在 3 秒后运行一次",
-            },
-            {
-                "path": "/providers/test", "endpoint": self.api_test_provider, "methods": ["POST"],
-                "auth": "bear", "summary": "连通性测试", "description": "抓取来源前几条验证连通（不订阅、不写历史），带最小间隔防抖",
-            },
-            {
-                "path": "/history/batch-delete", "endpoint": self.api_history_batch_delete, "methods": ["POST"],
-                "auth": "bear", "summary": "批量删除历史", "description": "按 unique 列表批量删除历史记录",
-            },
-            {
-                "path": "/history/recognize", "endpoint": self.api_history_recognize, "methods": ["POST"],
-                "auth": "bear", "summary": "重新识别", "description": "按 unique 对一条历史记录重新识别并尝试订阅",
-            },
-            {
-                "path": "/subscribes", "endpoint": self.api_subscribes, "methods": ["GET"],
-                "auth": "bear", "summary": "订阅列表", "description": "列出本插件创建的订阅",
-            },
-            {
-                "path": "/subscribes/delete", "endpoint": self.api_subscribes_delete, "methods": ["POST"],
-                "auth": "bear", "summary": "批量退订", "description": "按订阅ID列表批量退订（发删除事件）",
-            },
-            {
-                "path": "/subscribes/state", "endpoint": self.api_subscribes_state, "methods": ["POST"],
-                "auth": "bear", "summary": "批量暂停/恢复", "description": "按订阅ID列表批量置状态（S暂停/R恢复）",
-            },
-            {
-                "path": "/system/share", "endpoint": self.api_get_share, "methods": ["GET"],
-                "auth": "bear", "summary": "读取订阅数据共享",
-                "description": "读取 MoviePilot 全局『订阅数据共享』(SUBSCRIBE_STATISTIC_SHARE) 状态（热门媒体依赖）",
-            },
-            {
-                "path": "/system/share", "endpoint": self.api_set_share, "methods": ["POST"],
-                "auth": "bear", "summary": "设置订阅数据共享",
-                "description": "开/关 MoviePilot 全局『订阅数据共享』并持久化（改内存+落 app.env，无需重启）",
-            },
-        ]
-
-    def api_providers(self, lang: str = None) -> Dict[str, Any]:
-        """返回所有来源的 spec 元描述，供前端动态渲染配置表单（按 lang 本地化标签）。"""
-        specs = [provider.get_spec().to_dict() for provider in self._providers]
-        return {"providers": [localize_spec(spec, lang) for spec in specs]}
-
-    def api_get_config(self) -> Dict[str, Any]:
-        """返回当前配置；未保存过时回退为反射生成的默认配置。"""
-        config = self.get_config()
-        if not config:
-            config = build_defaults([provider.get_spec() for provider in self._providers])
-        return {"config": config}
-
-    def api_save_config(self, request: dict = None) -> Dict[str, Any]:
-        """保存完整配置并重载：update_config 持久化 + init_plugin 重建调度。"""
-        if not isinstance(request, dict):
-            return {"code": 1, "message": "请求体必须为配置对象"}
-        # 状态检测兜底：启用了却无任何可监听内容的来源，保存时自动关闭其开关（与前端一致，防绕过前端直接保存）。
-        self._auto_disable_empty_providers(request)
-        try:
-            if self.update_config(request) is False:
-                return {"code": 1, "message": "配置保存失败，运行配置未变更"}
-            # 重新装载：重建 settings/链/调度，并处理其中的一次性开关。
-            self.init_plugin(request)
-            self._refresh_jobs()
-            return {"code": 0, "message": "保存成功"}
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"{self.plugin_name}：保存配置失败: {exc}")
-            return {"code": 1, "message": f"保存失败: {exc}"}
 
     def _refresh_jobs(self) -> None:
         """自定义保存入口同样刷新宿主定时任务，移除旧 cron 与停用来源。"""
         update_plugin_job(self.__class__.__name__)
 
-    def _auto_disable_empty_providers(self, request: dict) -> None:
-        """状态检测兜底：遍历各来源，已启用却无任何可监听内容者（``provider.has_listening`` 为假）
-        自动关闭其开关。与前端保存时的即时判断一致，防止直接调 API 保存绕过前端。Mikan 等始终有
-        监听的来源默认 ``has_listening`` 返回 True，不受影响。"""
-        providers_cfg = request.get("providers")
-        if not isinstance(providers_cfg, dict):
-            return
-        for provider in self._providers:
-            pconf = providers_cfg.get(provider.provider_id)
-            if not isinstance(pconf, dict) or not pconf.get("enabled"):
-                continue
-            options = pconf.get("options") if isinstance(pconf.get("options"), dict) else {}
-            try:
-                if not provider.has_listening(options):
-                    pconf["enabled"] = False
-                    logger.info(f"{self.plugin_name}：{provider.provider_name} 未配置任何可监听内容，"
-                                f"保存时已自动关闭该来源开关。")
-            except Exception as exc:  # noqa: BLE001 - 单源检测失败不影响保存
-                logger.warning(f"{self.plugin_name}：{provider.provider_name} 监听状态检测失败（跳过）: {exc}")
-
-    def api_history(self, provider: str = None, status: str = None, mtype: str = None,
-                    keyword: str = None, year_min: str = None, year_max: str = None,
-                    page: int = 1, count: int = 50) -> Dict[str, Any]:
-        """按来源/状态/媒体类型/关键词/发行年份范围过滤并分页查询历史记录（按时间倒序）。
-
-        provider/status/mtype 支持逗号分隔多值；单值向后兼容。year_min/year_max 为发行年份闭区间。
-        """
-        store = self.__history_store()
-        records, total = store.query(provider=provider, status=status, mtype=mtype,
-                                     keyword=keyword, year_min=year_min, year_max=year_max,
-                                     page=page, count=count)
-        return {"list": records, "total": total, "page": page, "count": len(records)}
-
-    def api_history_uniques(self, provider: str = None, status: str = None, mtype: str = None,
-                            keyword: str = None, year_min: str = None,
-                            year_max: str = None) -> Dict[str, Any]:
-        """按同一套筛选条件返回全部历史的身份键，供前端「选全部」一次取齐。
-
-        只回身份键、不回整行记录：全选要的就是键集合，拉整行既浪费带宽又会被单页上限截断。
-        """
-        uniques = self.__history_store().uniques(
-            provider=provider, status=status, mtype=mtype, keyword=keyword,
-            year_min=year_min, year_max=year_max)
-        return {"uniques": uniques, "total": len(uniques)}
-
-    def api_delete_history(self, unique: str, apikey: str) -> Dict[str, Any]:
-        """删除一条历史（apikey 鉴权，供后端/脚本调用）。"""
-        if apikey != settings.API_TOKEN:
-            return {"code": 1, "message": "API密钥错误"}
-        return self.__delete_history(unique)
-
-    def api_delete_history_post(self, request: dict = None) -> Dict[str, Any]:
-        """删除一条历史（bear 鉴权，前端调用，body={"unique": ...}）。"""
-        unique = (request or {}).get("unique") if isinstance(request, dict) else None
-        if not unique:
-            return {"code": 1, "message": "缺少 unique"}
-        return self.__delete_history(unique)
-
-    def api_status(self, lang: str = None) -> Dict[str, Any]:
-        """返回总开关、各来源启用状态与历史统计（来源名按 lang 本地化）。"""
-        store = self.__history_store()
-        providers = []
-        for provider in self._providers:
-            spec = provider.get_spec()
-            pconf = ProviderConfig(self._settings.provider_raw(spec.provider_id), spec)
-            providers.append({
-                "provider_id": spec.provider_id,
-                "provider_name": localize_provider_name(spec.provider_id, spec.provider_name, lang),
-                "enabled": pconf.enabled,
-                "cron": pconf.cron,
-            })
-        with self._run_lock:
-            running = list(self._run_state.values())
-        return {
-            "enabled": self._settings.global_config.enabled,
-            "providers": providers,
-            "stats": store.stats(),
-            "running": running,
-        }
-
-    def api_dashboard(self, lang: str = None) -> Dict[str, Any]:
-        """提供只读概览；历史条数为当前保留量，不冒充累计订阅或执行次数。"""
-        try:
-            status = self.api_status(lang=lang)
-            subscriptions = self.__subscribe_manager().list_mine()
-            recent, _ = self.__history_store().query(status="subscribed", page=1, count=5)
-            return {
-                "code": 0,
-                **status,
-                "counts": {
-                    "history": status["stats"]["total"],
-                    "subscriptions": len(subscriptions),
-                    "paused": sum(row.get("state") == "S" for row in subscriptions),
-                    "blacklist": len(self.blacklist_store().list()),
-                },
-                "recent": recent,
-            }
-        except Exception as exc:  # noqa: BLE001 - 单个组件失败不影响宿主仪表盘
-            logger.error(f"{self.plugin_name}：读取仪表盘概览失败: {exc}")
-            return {"code": 1, "message": "读取仪表盘概览失败，请稍后重试"}
-
-    def api_run(self, request: dict = None, provider_id: str = None) -> Dict[str, Any]:
-        """触发指定来源在 3 秒后运行一次（provider_id 支持 body 或 query）。"""
-        pid = provider_id or ((request or {}).get("provider_id") if isinstance(request, dict) else None)
-        if not pid:
-            return {"code": 1, "message": "缺少 provider_id"}
-        provider = registry.get(pid)
-        if provider is None:
-            return {"code": 1, "message": f"未知来源: {pid}"}
-        self.__schedule_once(self.run_provider, provider_id=pid)
-        return {"code": 0, "message": f"{provider.provider_name} 已触发，将在 3 秒后运行"}
-
-    def api_test_provider(self, request: dict = None, provider_id: str = None) -> Dict[str, Any]:
-        """连通性测试：抓取该来源前几条以验证可达，**绝不进入订阅管线、绝不订阅、绝不写历史**。
-
-        服务端防抖：同一来源两次测试的最小间隔 2 秒，短时间高频触发直接拒绝（防止绕过前端疯狂点击）。
-        """
-        pid = provider_id or ((request or {}).get("provider_id") if isinstance(request, dict) else None)
-        if not pid:
-            return {"code": 1, "message": "缺少 provider_id"}
-        provider = registry.get(pid)
-        if provider is None:
-            return {"code": 1, "message": f"未知来源: {pid}"}
-        # 防抖：同一来源 2 秒内重复测试直接拒绝。
-        now = datetime.now()
-        with self._test_lock:
-            last = self._test_last.get(pid)
-            if last is not None and (now - last).total_seconds() < 2.0:
-                return {"code": 1, "throttled": True, "message": "操作过于频繁，请稍后再试"}
-            self._test_last[pid] = now
-        spec = provider.get_spec()
-        pconf = ProviderConfig(self._settings.provider_raw(pid), spec)
-        context = ProviderContext(
-            chain=self.chain,
-            downloadchain=self._downloadchain,
-            subscribechain=self._subscribechain,
-            logger=logger,
-            event=self._event,
-            proxy=bool(pconf.option("proxy")),
-            get_data=self.get_data,
-            save_data=self.save_data,
-        )
-        # 连通性测试用「spec 默认值兜底 + 用户已存配置覆盖」的完整 options：
-        # 避免未细配的来源（如热门/奈飞的启用开关、类别未落库）被判为「已连通但无条目」。
-        test_options = {f.key: f.default for f in (spec.options_schema or [])}
-        test_options.update(pconf.options or {})
-        # 连通性测试强制关缓存（须盖过用户已存的 use_cache=True）：既不读缓存（真实走网络验证连通、
-        # 而非产出旧的缓存条目），也不写缓存（不产生持久化副作用、不污染正常运行的缓存周期）。
-        test_options["use_cache"] = False
-        try:
-            count = 0
-            sample = None
-            # 仅消费前几条即 break：验证连通与产出，不遍历全部、不调用任何订阅/历史逻辑。
-            for item in provider.fetch(test_options, context):
-                count += 1
-                if sample is None:
-                    sample = getattr(item, "title", None)
-                if count >= 3:
-                    break
-        except Exception as exc:  # noqa: BLE001 - 测试失败即返回失败，不影响插件本体
-            logger.warning(f"{self.plugin_name}：{spec.provider_name} 连通性测试失败: {exc}")
-            return {"code": 0, "ok": False, "message": f"连通失败：{exc}"}
-        if count > 0:
-            return {"code": 0, "ok": True, "count": count, "sample": sample,
-                    "message": f"连通正常，取到示例：{sample}"}
-        return {"code": 0, "ok": False, "count": 0, "message": "已连通但未取到条目（可能暂无数据或配置为空）"}
-
-    def api_get_share(self) -> Dict[str, Any]:
-        """读取 MoviePilot 全局『订阅数据共享』(SUBSCRIBE_STATISTIC_SHARE) 当前状态。
-
-        热门媒体来源依赖该主程序开关：关闭时服务端订阅统计接口直接返回空、本来源无法获取数据。
-        """
-        return {"code": 0, "enabled": bool(settings.SUBSCRIBE_STATISTIC_SHARE)}
-
-    def api_set_share(self, request: dict = None) -> Dict[str, Any]:
-        """开/关 MoviePilot 全局『订阅数据共享』并持久化（改内存 + 落 app.env，无需重启）。
-
-        经官方 settings.update_setting 写入，success 三态——True 已更新 / None 值未变 / False 失败
-        （该键被真实 OS 环境变量占用时拒写）；仅真正变更时广播 ConfigChanged 事件。body={"enabled": bool}。
-        """
-        if not isinstance(request, dict) or "enabled" not in request:
-            return {"code": 1, "message": "缺少 enabled"}
-        enabled = bool(request.get("enabled"))
-        try:
-            success, message = settings.update_setting("SUBSCRIBE_STATISTIC_SHARE", enabled)
-        except Exception as exc:  # noqa: BLE001 - 写设置失败即返回失败，不影响插件本体
-            logger.error(f"{self.plugin_name}：设置订阅数据共享失败: {exc}")
-            return {"code": 1, "enabled": bool(settings.SUBSCRIBE_STATISTIC_SHARE), "message": f"设置失败: {exc}"}
-        if success is False:
-            # 被真实 OS 环境变量占用等原因拒写：如实回传当前值与原因，前端据此提示手动配置。
-            return {"code": 1, "enabled": bool(settings.SUBSCRIBE_STATISTIC_SHARE),
-                    "message": message or "无法修改：该设置可能由系统环境变量锁定，请手动在 MoviePilot 配置中调整"}
-        if success:
-            # 仅在值真正发生变化时广播（None 表示已是目标值、无需广播）；广播失败不影响已成功的写入。
-            try:
-                eventmanager.send_event(
-                    etype=EventType.ConfigChanged,
-                    data=ConfigChangeEventData(
-                        key="SUBSCRIBE_STATISTIC_SHARE", value=enabled, change_type="update"),
-                )
-            except Exception as exc:  # noqa: BLE001 - 广播失败仅告警，设置本身已成功
-                logger.warning(f"{self.plugin_name}：广播配置变更事件失败（不影响设置）: {exc}")
-        return {"code": 0, "enabled": bool(settings.SUBSCRIBE_STATISTIC_SHARE), "message": "已更新"}
-
-    def __delete_history(self, unique: str) -> Dict[str, Any]:
-        """删除历史的共用实现。"""
-        store = self.__history_store()
-        removed = store.delete(unique)
-        if removed:
-            return {"code": 0, "message": "删除成功"}
-        return {"code": 1, "message": "未找到该记录"}
-
-    def api_history_batch_delete(self, request: dict = None) -> Dict[str, Any]:
-        """批量删除历史（bear 鉴权，body={"uniques":[...]}）。"""
-        uniques = (request or {}).get("uniques") if isinstance(request, dict) else None
-        if not isinstance(uniques, list) or not uniques:
-            return {"code": 1, "message": "缺少 uniques 列表"}
-        store = self.__history_store()
-        removed = store.delete_many(uniques)
-        return {"code": 0, "message": f"已删除 {removed} 条", "removed": removed}
-
-    def api_history_recognize(self, request: dict = None) -> Dict[str, Any]:
-        """重新识别一条历史记录（供『异常/未识别』项手动再跑一次识别 + 订阅）。
-
-        从历史记录还原候选（RankMediaItem），复用订阅落地管线单条处理：识别成功则订阅
-        并以新身份键记录，仍失败则记为新的异常。body={"unique": ...}。同步执行，返回最新状态。
-        """
-        unique = (request or {}).get("unique") if isinstance(request, dict) else None
-        if not unique:
-            return {"code": 1, "message": "缺少 unique"}
-        store = self.__history_store()
-        rec = store.get(unique)
-        if rec is None:
-            return {"code": 1, "message": "未找到该记录"}
-        provider = registry.get(rec.get("provider"))
-        if provider is None:
-            return {"code": 1, "message": f"来源不可用: {rec.get('provider')}"}
-        try:
-            spec = provider.get_spec()
-            pconf = ProviderConfig(self._settings.provider_raw(provider.provider_id), spec)
-            # 还原候选：类型中文串 → MediaType 枚举；优先恢复 v3 通用身份，旧 ID
-            # 字段同时保留，供旧历史与兼容识别链使用。
-            type_val = rec.get("type")
-            try:
-                type_hint = MediaType(type_val) if type_val else None
-            except ValueError:
-                type_hint = None
-            item = RankMediaItem(
-                title=rec.get("title") or "",
-                year=rec.get("year"),
-                type_hint=type_hint,
-                douban_id=rec.get("doubanid"),
-                tmdb_id=rec.get("tmdbid"),
-                bangumi_id=rec.get("bangumiid"),
-                season=rec.get("season"),
-                poster=rec.get("poster"),
-                media_source=rec.get("media_source"),
-                media_id=rec.get("media_id"),
-                episode_group=rec.get("episode_group"),
-            )
-            if isinstance(rec.get("source_item"), dict):
-                item = RankMediaItem.from_dict(rec["source_item"])
-                if item.season is None and rec.get("season") is not None:
-                    item.season = rec["season"]
-            context = ProviderContext(
-                chain=self.chain,
-                downloadchain=self._downloadchain,
-                subscribechain=self._subscribechain,
-                logger=logger,
-                event=self._event,
-                proxy=bool(pconf.option("proxy")),
-                get_data=self.get_data,
-                save_data=self.save_data,
-            )
-            # 先处理再移除旧键；存储或识别异常时仍保留原候选供重试。
-            filter_chain = build_filter_chain([f.key for f in spec.filters_schema])
-            executor = SubscribeExecutor(context, self._settings.global_config,
-                                         self.__build_subscribed_index())
-            outcome = executor.process(item, provider, filter_chain, store, pconf.filters)
-            store.flush()
-            new_season = getattr(outcome.mediainfo, "season", None)
-            new_unique = executor._identity(outcome.item, outcome.mediainfo, new_season)
-            if new_unique != unique and store.get(new_unique) is not None:
-                store.delete(unique)
-        except Exception as exc:  # noqa: BLE001 - 端点兜底，不影响插件本体
-            logger.error(f"{self.plugin_name}：重新识别失败: {exc}")
-            return {"code": 1, "message": f"重新识别失败: {exc}"}
-        return {"code": 0, "status": outcome.status.value,
-                "reason": getattr(outcome, "reason", None), "message": "重新识别完成"}
-
-    def api_history_supplement(self, request: dict = None) -> Dict[str, Any]:
-        """从历史补充媒体定义和订阅参数，重新识别并尝试新增。"""
-        context = ProviderContext(chain=self.chain, downloadchain=self._downloadchain,
-                                  subscribechain=self._subscribechain, logger=logger, event=self._event,
-                                  get_data=self.get_data, save_data=self.save_data)
-        try:
-            return HistorySupplementService(context, self._settings.global_config,
-                                            self.__history_store()).submit(request)
-        except ValueError as exc:
-            return {"code": 1, "message": str(exc)}
-        except Exception as exc:  # noqa: BLE001 - 不影响自动来源任务
-            logger.error(f"{self.plugin_name}：补充编辑订阅失败: {exc}")
-            return {"code": 1, "message": "创建订阅失败，请查看日志后重试"}
-
     # ------------------------------------------------------------------ #
     # 订阅手动管理
     # ------------------------------------------------------------------ #
-    def __subscribe_manager(self) -> SubscribeManager:
+    def _subscribe_manager(self) -> SubscribeManager:
         """
         构造订阅管理器，退订回调发送主程序标准 SubscribeDeleted 事件。
 
         :return: 通过 SDK 快照查询并复核归属的订阅管理器
         """
+
         def _on_deleted(sid, sub):
             """
             将删除前的 SDK 订阅快照转成事件数据并通知宿主。
@@ -851,16 +527,23 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
             try:
                 info = sub.model_dump(mode="json")
             except Exception:  # noqa: BLE001 - 快照失败退化为最小负载
-                info = {"media_source": getattr(sub, "media_source", None),
-                        "media_id": getattr(sub, "media_id", None)}
+                info = {
+                    "media_source": getattr(sub, "media_source", None),
+                    "media_id": getattr(sub, "media_id", None),
+                }
             eventmanager.send_event(
                 EventType.SubscribeDeleted,
-                {"subscribe_id": sid, "subscribe_info": info})
+                {"subscribe_id": sid, "subscribe_info": info},
+            )
+
         # 用配置里的用户名，与 executor 落地订阅时所用的一致；两边若分叉，管理页会
         # 按另一个名字去查，列表恒空且无法退订。
-        return SubscribeManager(SubscribeOper(),
-                                username=self._settings.global_config.username,
-                                on_deleted=_on_deleted)
+        return SubscribeManager(
+            SubscribeOper(),
+            username=self._settings.global_config.username,
+            on_deleted=_on_deleted,
+            source_lookup=lambda keys: self._history_store().providers_for(keys),
+        )
 
     def blacklist_resolve_media(self, media):
         """仅识别整剧身份，补充跨季忽略别名；不触发订阅。"""
@@ -875,51 +558,17 @@ class AutomaticSubscriptionAssistant(BlacklistApiMixin, _PluginBase):
             source, media_id = next(iter(snapshot["ids"].items()))
             if source == "tmdb":
                 source = "themoviedb"
-        return self.chain.recognize_media(meta=meta, media_source=source, media_id=media_id,
-                                          mtype=MediaType(snapshot["type"]))
+        return self.chain.recognize_media(
+            meta=meta,
+            media_source=source,
+            media_id=media_id,
+            mtype=MediaType(snapshot["type"]),
+        )
 
     def blacklist_history_store(self):
         """供黑名单入口复用版本对应的历史仓库。"""
-        return self.__history_store()
+        return self._history_store()
 
     def blacklist_subscribe_manager(self):
         """黑名单写操作沿用本插件订阅的归属检查。"""
-        return self.__subscribe_manager()
-
-    def api_subscribes(self) -> Dict[str, Any]:
-        """列出本插件创建的订阅。"""
-        try:
-            rows = self.__subscribe_manager().list_mine()
-            return {"list": rows, "total": len(rows)}
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"{self.plugin_name}：读取订阅列表失败: {exc}")
-            return {"list": [], "total": 0, "message": f"读取失败: {exc}"}
-
-    def api_subscribes_delete(self, request: dict = None) -> Dict[str, Any]:
-        """批量退订（body={"ids":[...]}）。"""
-        ids = (request or {}).get("ids") if isinstance(request, dict) else None
-        if not isinstance(ids, list) or not ids:
-            return {"code": 1, "message": "缺少 ids 列表"}
-        try:
-            res = self.__subscribe_manager().delete(ids)
-            return {"code": 0, "message": f"已退订 {res['ok']} 个" + (f"，{res['failed']} 个失败" if res["failed"] else ""), **res}
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"{self.plugin_name}：批量退订失败: {exc}")
-            return {"code": 1, "message": f"退订失败: {exc}"}
-
-    def api_subscribes_state(self, request: dict = None) -> Dict[str, Any]:
-        """批量暂停/恢复（body={"ids":[...],"state":"S|R"}）。"""
-        body = request if isinstance(request, dict) else {}
-        ids = body.get("ids")
-        state = body.get("state")
-        if not isinstance(ids, list) or not ids:
-            return {"code": 1, "message": "缺少 ids 列表"}
-        try:
-            res = self.__subscribe_manager().set_state(ids, state)
-            label = "暂停" if state == "S" else "恢复"
-            return {"code": 0, "message": f"已{label} {res['ok']} 个" + (f"，{res['failed']} 个失败" if res["failed"] else ""), **res}
-        except ValueError as exc:
-            return {"code": 1, "message": str(exc)}
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"{self.plugin_name}：批量置状态失败: {exc}")
-            return {"code": 1, "message": f"操作失败: {exc}"}
+        return self._subscribe_manager()

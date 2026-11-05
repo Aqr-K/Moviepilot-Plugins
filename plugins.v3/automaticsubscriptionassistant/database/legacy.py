@@ -4,14 +4,16 @@
 计数，不阻断其余记录。导入成功后原 KV 值不直接删除，而是改存到备份键，留一条可回溯
 的退路；同时写下带时间与条数的标记，供排查与幂等判断。
 """
+
 from __future__ import annotations
 
-from datetime import datetime
 import json
-from typing import Callable, Optional
+from collections.abc import Callable
+from copy import deepcopy
+from datetime import datetime
 
-from .history import HISTORY_KEY
-from .models import HistoryRecord
+from ..db.oper.history import HISTORY_KEY
+from ..schemas.history import HistoryRecord
 
 # 迁移完成标记，值形如 {"migrated_at": "...", "imported": 12, "skipped": 0, "source_total": 12}。
 MIGRATION_KEY = "history_migration"
@@ -23,13 +25,19 @@ BACKUP_KEY = "history_migrated_backup"
 class MigrationResult:
     """一次迁移的结果。"""
 
-    def __init__(self, performed: bool, imported: int = 0, skipped: int = 0,
-                 source_total: int = 0, error: Optional[str] = None):
-        self.performed = performed        # 本次是否真的搬了数据
-        self.imported = imported          # 成功写入表的条数
-        self.skipped = skipped            # 跳过的坏记录条数
+    def __init__(
+        self,
+        performed: bool,
+        imported: int = 0,
+        skipped: int = 0,
+        source_total: int = 0,
+        error: str | None = None,
+    ):
+        self.performed = performed  # 本次是否真的搬了数据
+        self.imported = imported  # 成功写入表的条数
+        self.skipped = skipped  # 跳过的坏记录条数
         self.source_total = source_total  # KV 中原有的条数
-        self.error = error                # 整体失败时的原因
+        self.error = error  # 整体失败时的原因
 
     def summary(self) -> str:
         """人类可读的一句话结果。"""
@@ -43,8 +51,9 @@ class MigrationResult:
         return text
 
 
-def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
-                            del_data: Callable, logger=None) -> MigrationResult:
+def migrate_history_from_kv(
+    store, get_data: Callable, save_data: Callable, del_data: Callable, logger=None
+) -> MigrationResult:
     """把 KV 中的历史记录导入 ``store``，完成后把原值挪到备份键。
 
     :param store: 目标 :class:`~.history.HistoryStore`
@@ -55,13 +64,17 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
     :return: 迁移结果
     """
     try:
-        legacy = get_data(HISTORY_KEY)
+        legacy = deepcopy(get_data(HISTORY_KEY))
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有存量，不阻断插件启动
         if logger:
             logger.warning(f"读取存量历史失败，跳过迁移: {exc}")
         return MigrationResult(performed=False, error=str(exc))
 
-    if not isinstance(legacy, list) or not legacy:
+    if legacy is not None and not isinstance(legacy, list):
+        return MigrationResult(
+            performed=False, error="历史迁移源不是列表，已保留待排查"
+        )
+    if not legacy:
         # 键不存在、已迁走、或本来就是空历史：都无需搬运。空列表一并清掉，
         # 免得每次启动都再走一遍这个判断。
         if isinstance(legacy, list):
@@ -80,10 +93,14 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
                 seen.add(identity)
         if save_data(BACKUP_KEY, archived) is False:
             raise RuntimeError("历史备份写入失败")
+        if get_data(BACKUP_KEY) != archived:
+            raise RuntimeError("历史备份回读校验失败")
     except Exception as exc:  # noqa: BLE001 - 保留原始数据供后续重试
         if logger:
             logger.error(f"历史迁移备份失败，原始数据已保留: {exc}")
-        return MigrationResult(performed=False, source_total=len(legacy), error=str(exc))
+        return MigrationResult(
+            performed=False, source_total=len(legacy), error=str(exc)
+        )
 
     imported = 0
     skipped = 0
@@ -108,33 +125,52 @@ def migrate_history_from_kv(store, get_data: Callable, save_data: Callable,
         error = "存量历史全部无法解析，已原样保留待排查"
         if logger:
             logger.error(f"{error}（共 {len(legacy)} 条）")
-        return MigrationResult(performed=False, skipped=skipped,
-                               source_total=len(legacy), error=error)
+        return MigrationResult(
+            performed=False, skipped=skipped, source_total=len(legacy), error=error
+        )
 
     marker = {
-        "migrated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "migrated_at": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "imported": imported,
         "skipped": skipped,
         "source_total": len(legacy),
     }
     try:
+        if get_data(HISTORY_KEY) != legacy:
+            raise RuntimeError("迁移期间历史源发生变化，保留源数据等待重试")
         if retry:
             # 可解析但暂时写入失败的记录继续留在迁移源；坏记录已在备份中留档。
             if save_data(HISTORY_KEY, retry) is False:
                 raise RuntimeError("保存待重试历史失败")
+            if get_data(HISTORY_KEY) != retry:
+                raise RuntimeError("待重试历史回读校验失败")
         else:
             if save_data(MIGRATION_KEY, marker) is False:
                 raise RuntimeError("保存迁移标记失败")
+            if get_data(MIGRATION_KEY) != marker:
+                raise RuntimeError("迁移标记回读校验失败")
             if del_data(HISTORY_KEY) is False:
                 raise RuntimeError("删除已迁移历史失败")
+            if get_data(HISTORY_KEY) is not None:
+                raise RuntimeError("迁移源删除后仍存在")
     except Exception as exc:  # noqa: BLE001 - 已导入部分保留，原始数据可重试
         if logger:
             logger.warning(f"历史迁移收尾失败: {exc}")
-        return MigrationResult(performed=True, imported=imported, skipped=skipped,
-                               source_total=len(legacy), error=str(exc))
+        return MigrationResult(
+            performed=True,
+            imported=imported,
+            skipped=skipped,
+            source_total=len(legacy),
+            error=str(exc),
+        )
 
-    result = MigrationResult(performed=True, imported=imported, skipped=skipped,
-                             source_total=len(legacy))
+    result = MigrationResult(
+        performed=True,
+        imported=imported,
+        skipped=skipped,
+        source_total=len(legacy),
+        error="仍有历史记录待重试" if retry else None,
+    )
     if logger:
         logger.info(result.summary())
     return result

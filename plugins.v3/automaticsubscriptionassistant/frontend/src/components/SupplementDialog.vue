@@ -38,29 +38,29 @@ const emit = defineEmits(['update:modelValue', 'changed'])
 const toast = inject('moviepilot:toast', null)
 const inst = getCurrentInstance()
 const messages = {
-  'zh-CN': {
+  'zh-CN': { music: '音乐', artists: '艺术家（逗号分隔）', musicType: '音乐类型', recordingType: '单曲', albumType: '专辑',
     title: '补充编辑', hint: '补充媒体信息后重新识别并添加订阅。本次手动操作不使用榜单筛选；仍检查黑名单、媒体库和已有订阅，不修改自动任务设置。',
-    name: '影视名称', type: '类型', movie: '电影', tv: '电视剧', year: '发行年份（可选）', source: '媒体来源（可选）', mediaId: '媒体 ID（可选）',
+    name: '媒体名称', type: '类型', movie: '电影', tv: '电视剧', year: '发行年份（可选）', source: '媒体来源（可选）', mediaId: '媒体 ID（可选）',
     identityHint: '来源和 ID 同时留空时按名称、类型和年份重新识别。', season: '目标季号（0 为特别篇）', group: '剧集组（可选）',
     settings: '本次订阅设置', defaults: '留空使用主程序默认设置。参数仅作用于本次创建，不修改来源或全局配置。',
     keyword: '搜索关键词', quality: '质量', resolution: '分辨率', effect: '特效', sites: '订阅站点', downloader: '下载器', path: '保存路径',
     interval: '搜索间隔（小时，留空跟随系统）', total: '总集数（可选）', start: '开始集数（可选）', include: '资源包含表达式', exclude: '资源排除表达式', rules: '过滤规则组',
     mode: '订阅模式', normal: '普通订阅', best: '洗版订阅', whole: '全集洗版', exists: '媒体库已有内容', inherit: '跟随主程序/插件默认设置', skip: '跳过已入库内容', allow: '允许创建订阅',
-    reset: '重置', cancel: '取消', submit: '重新识别并添加', required: '请填写影视名称', pair: '媒体来源与 ID 必须同时填写或同时留空',
+    reset: '重置', cancel: '取消', submit: '重新识别并添加', required: '请填写媒体名称', pair: '媒体来源与 ID 必须同时填写或同时留空',
     invalid: '{name} 格式或范围不正确', optionsError: '部分选项加载失败，可留空使用默认设置，或稍后重新打开。', failed: '操作失败', created: '已添加新订阅',
   },
-  'zh-TW': {
+  'zh-TW': { music: '音樂', artists: '藝術家（逗號分隔）', musicType: '音樂類型', recordingType: '單曲', albumType: '專輯',
     title: '補充編輯', hint: '補充媒體資訊後重新識別並新增訂閱。本次手動操作不使用榜單篩選；仍檢查黑名單、媒體庫和已有訂閱，不修改自動工作設定。',
-    name: '影視名稱', type: '類型', movie: '電影', tv: '劇集', year: '發行年份（可選）', source: '媒體來源（可選）', mediaId: '媒體 ID（可選）',
+    name: '媒體名稱', type: '類型', movie: '電影', tv: '劇集', year: '發行年份（可選）', source: '媒體來源（可選）', mediaId: '媒體 ID（可選）',
     identityHint: '來源和 ID 同時留空時按名稱、類型和年份重新識別。', season: '目標季號（0 為特別篇）', group: '劇集組（可選）',
     settings: '本次訂閱設定', defaults: '留空使用主程式預設設定。參數僅作用於本次建立，不修改來源或全域設定。',
     keyword: '搜尋關鍵字', quality: '品質', resolution: '解析度', effect: '特效', sites: '訂閱站點', downloader: '下載器', path: '儲存路徑',
     interval: '搜尋間隔（小時，留空跟隨系統）', total: '總集數（可選）', start: '開始集數（可選）', include: '資源包含運算式', exclude: '資源排除運算式', rules: '篩選規則組',
     mode: '訂閱模式', normal: '普通訂閱', best: '洗版訂閱', whole: '全集洗版', exists: '媒體庫已有內容', inherit: '跟隨主程式/外掛預設設定', skip: '略過已入庫內容', allow: '允許建立訂閱',
-    reset: '重設', cancel: '取消', submit: '重新識別並新增', required: '請填寫影視名稱', pair: '媒體來源與 ID 必須同時填寫或同時留空',
+    reset: '重設', cancel: '取消', submit: '重新識別並新增', required: '請填寫媒體名稱', pair: '媒體來源與 ID 必須同時填寫或同時留空',
     invalid: '{name} 格式或範圍不正確', optionsError: '部分選項載入失敗，可留空使用預設設定，或稍後重新開啟。', failed: '操作失敗', created: '已新增訂閱',
   },
-  'en-US': {
+  'en-US': { music: 'Music', artists: 'Artists (comma separated)', musicType: 'Music type', recordingType: 'Song', albumType: 'Album',
     title: 'Edit and subscribe', hint: 'Correct the media, recognize it again and add a subscription. This manual action skips ranking filters, checks the blacklist, library and existing subscriptions, and keeps automatic task settings.',
     name: 'Title', type: 'Type', movie: 'Movie', tv: 'TV series', year: 'Release year (optional)', source: 'Media source (optional)', mediaId: 'Media ID (optional)',
     identityHint: 'Clear both source and ID to recognize by title, type and year.', season: 'Target season (0 for specials)', group: 'Episode group (optional)',
@@ -91,11 +91,13 @@ const optionsError = ref(false)
 const siteOptions = ref([])
 const downloaderOptions = ref([])
 const ruleOptions = ref([])
+const isMusic = computed(() => media.type === '音乐')
 const isTV = computed(() => media.type === '电视剧')
-const sources = [{ title: 'TMDB', value: 'themoviedb' }, { title: 'Douban', value: 'douban' }, { title: 'Bangumi', value: 'bangumi' }]
+const sources = [{ title: 'TMDB', value: 'themoviedb' }, { title: 'Douban', value: 'douban' }, { title: 'Bangumi', value: 'bangumi' }, { title: 'AniList', value: 'anilist' }, { title: 'MusicBrainz', value: 'musicbrainz' }, { title: 'TheAudioDB', value: 'theaudiodb' }, { title: 'Douban Music', value: 'doubanmusic' }]
 const mediaFields = computed(() => [
   { type: 'text', key: 'title', label: t('name') },
-  { type: 'select', key: 'type', label: t('type'), clearable: false, items: [{ title: t('movie'), value: '电影' }, { title: t('tv'), value: '电视剧' }] },
+  { type: 'select', key: 'type', label: t('type'), clearable: false, items: [{ title: t('movie'), value: '电影' }, { title: t('tv'), value: '电视剧' }, { title: t('music'), value: '音乐' }] },
+  ...(isMusic.value ? [{ type: 'text', key: 'artistsText', label: t('artists') }, { type: 'select', key: 'music_type', label: t('musicType'), clearable: false, items: [{ title: t('recordingType'), value: 'recording' }, { title: t('albumType'), value: 'album' }] }] : []),
   { type: 'number', key: 'year', label: t('year'), min: 1800, max: 2999, step: 1 },
   { type: 'select', key: 'media_source', label: t('source'), items: sources },
   { type: 'text', key: 'media_id', label: t('mediaId'), hint: t('identityHint') },
@@ -103,9 +105,9 @@ const mediaFields = computed(() => [
 ])
 const subscriptionFields = computed(() => [
   { type: 'text', key: 'keyword', label: t('keyword') },
-  { type: 'select', key: 'quality', label: t('quality'), items: ['Remux', ['Blu-ray', 'Blu-?Ray'], ['UHD', 'UHD|UltraHD'], ['WEB-DL / WEBRip', 'WEB-?DL|WEB-?RIP'], 'HDTV'].map(v => ({ title: Array.isArray(v) ? v[0] : v, value: Array.isArray(v) ? v[1] : v })) },
+  ...(!isMusic.value ? [{ type: 'select', key: 'quality', label: t('quality'), items: ['Remux', ['Blu-ray', 'Blu-?Ray'], ['UHD', 'UHD|UltraHD'], ['WEB-DL / WEBRip', 'WEB-?DL|WEB-?RIP'], 'HDTV'].map(v => ({ title: Array.isArray(v) ? v[0] : v, value: Array.isArray(v) ? v[1] : v })) },
   { type: 'select', key: 'resolution', label: t('resolution'), items: [{ title: '4K', value: '4K|2160p|x2160' }, { title: '1080p', value: '1080[pi]|x1080' }, { title: '720p', value: '720[pi]|x720' }] },
-  { type: 'text', key: 'effect', label: t('effect') },
+  { type: 'text', key: 'effect', label: t('effect') }] : []),
   { type: 'select', key: 'sites', label: t('sites'), multi: true, items: siteOptions.value },
   { type: 'select', key: 'downloader', label: t('downloader'), items: downloaderOptions.value },
   { type: 'text', key: 'save_path', label: t('path') },
@@ -121,7 +123,7 @@ function resetForm() {
   const item = props.target
   Object.assign(media, { title: item.title || '', type: item.type || '电影', year: item.year || '',
     media_source: item.media_source || null, media_id: item.media_id == null ? '' : String(item.media_id),
-    season: item.season ?? '', episode_group: item.episode_group || '' })
+    season: item.season ?? '', episode_group: item.episode_group || '', music_type: item.music_type || 'recording', artistsText: (item.artists || []).join(', ') })
   Object.assign(subscription, emptySettings())
   feedback.value = ''
   advanced.value = undefined
@@ -137,6 +139,7 @@ function integer(value, key, min, max, required = false) {
 }
 function buildRequest() {
   if (!media.title.trim()) throw new Error(t('required'))
+  if (isMusic.value && !(media.artistsText || '').trim()) throw new Error(t('invalid', { name: t('artists') }))
   const mediaId = media.media_id.trim()
   if (!!media.media_source !== !!mediaId) throw new Error(t('pair'))
   const year = integer(media.year, 'year', 1800, 2999)
@@ -160,7 +163,8 @@ function buildRequest() {
     options.best_version_full = isTV.value && subscription.mode === 'whole' ? 1 : 0
   }
   return { unique: props.target.unique, media: { title: media.title.trim(), type: media.type, year: year == null ? null : String(year),
-    media_source: media.media_source, media_id: mediaId, season, episode_group: isTV.value ? media.episode_group.trim() : null },
+    media_source: media.media_source, media_id: mediaId,
+    ...(isMusic.value ? { music_type: media.music_type, artists: (media.artistsText || '').split(/[,，]/).map(name => name.trim()).filter(Boolean) } : {}), season, episode_group: isTV.value ? media.episode_group.trim() : null },
     subscription: options, ...(typeof subscription.exist_ok === 'boolean' ? { exist_ok: subscription.exist_ok } : {}) }
 }
 

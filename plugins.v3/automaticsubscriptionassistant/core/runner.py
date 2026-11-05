@@ -9,7 +9,7 @@ from .filters import build_filter_chain
 if TYPE_CHECKING:
     from .config import GlobalConfig, ProviderConfig
     from .dedup import SubscribedIndex
-    from .history import HistoryStore
+    from ..services.history import HistoryStore
     from .provider import ProviderContext, RankProvider
 
 
@@ -32,10 +32,14 @@ class ProviderRunner:
         """执行单源，返回各状态计数统计（按 SubscribeStatus.value 累加）。"""
         stats: Dict[str, int] = {}
         spec = provider.get_spec()
-        filter_chain = build_filter_chain([f.key for f in spec.filters_schema])
+        filter_chain = build_filter_chain(list(dict.fromkeys([f.key for f in spec.filters_schema] + ["year", "vote", "media_type", "popularity"])))
 
+        filters_config = {f.key:provider_config.filter(f.key) for f in spec.filters_schema}
         processed = 0
         try:
+            if (any(f.kind == 'rule-list' for f in spec.options_schema)
+                    and 'rules' not in provider_config.options and provider_config.filters):
+                raise ValueError('来源筛选配置已更新，请重新设置并保存规则卡片')
             # fetch 是生成器函数，调用本身不执行函数体：抓取失败一律在迭代时才抛出，
             # 故整源兜底必须裹住这个循环，裹调用点是捕不到的。
             for item in provider.fetch(provider_config.options, self.ctx):
@@ -44,7 +48,7 @@ class ProviderRunner:
                     break
                 try:
                     outcome = self.executor.process(
-                        item, provider, filter_chain, self.history, provider_config.filters)
+                        item, provider, filter_chain, self.history, filters_config)
                 except Exception as exc:  # noqa: BLE001 - 单条兜底，继续下一条
                     if self.ctx.logger:
                         self.ctx.logger.error(f"{provider.provider_name} 处理条目失败: {exc}")
@@ -66,6 +70,8 @@ class ProviderRunner:
 
     def _prune_history(self) -> None:
         """按全局配置修剪历史，保留最近若干条；未配置上限则不动。"""
+        if self.ctx.event is not None and self.ctx.event.is_set():
+            return
         keep = getattr(self.gcfg, "history_keep", 0) or 0
         if keep <= 0:
             return

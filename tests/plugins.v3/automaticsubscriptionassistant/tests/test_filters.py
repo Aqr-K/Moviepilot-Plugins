@@ -14,7 +14,7 @@ from app.plugins.automaticsubscriptionassistant.core.filters import (
     YearFilter,
     build_filter_chain,
 )
-from app.plugins.automaticsubscriptionassistant.core.models import RankMediaItem
+from app.plugins.automaticsubscriptionassistant.schemas import RankMediaItem
 
 
 def _item(**kw) -> RankMediaItem:
@@ -123,7 +123,7 @@ class _CountingFilter(MediaFilter):
         self.called = False
 
     def accept(self, item, mediainfo, config):
-        from app.plugins.automaticsubscriptionassistant.core.models import FilterVerdict
+        from app.plugins.automaticsubscriptionassistant.schemas import FilterVerdict
         self.called = True
         if self._accepted:
             return FilterVerdict.accept()
