@@ -1,5 +1,7 @@
 <template>
-  <section ref="layoutRef" class="asa-config" :class="{ 'asa-config--docked': changedCount > 0 }">
+  <section ref="layoutRef" class="asa-config" :class="{ 'asa-config--docked': !navigationView && changedCount > 0 }">
+    <Page v-if="navigationView" :api="api" :initial-view="navigationView" :show_switch="true" @switch="navigationView = ''" @close="emit('close')" />
+    <template v-else>
     <!-- 粘性头部 -->
     <header class="asa-cfg-head">
       <div class="asa-cfg-head__brand">
@@ -63,21 +65,25 @@
             </button>
           </div>
           <div class="asa-nav__list">
-            <button
-              v-for="g in groups"
-              :key="g.key"
-              :class="['asa-nav__item', { 'asa-nav__item--active': activeGroup === g.key }]"
-              type="button"
-              @click="selectGroup(g.key)"
-            >
-              <provider-logo :provider="g.key" :fallback="g.icon" :size="20" />
-              <span class="asa-nav__label">{{ g.name }}</span>
-              <span
-                v-if="g.key !== GLOBAL_KEY"
-                :class="['asa-nav__dot', { 'asa-nav__dot--on': isProviderEnabled(g.key) }]"
-              ></span>
-              <v-tooltip v-if="navCollapsed" activator="parent" location="right" :text="g.name" />
-            </button>
+            <template v-for="g in groups" :key="g.key">
+              <div v-if="g.heading" class="asa-nav__section" role="separator" :aria-label="g.name">
+                <span>{{ g.name }}</span>
+              </div>
+              <button
+                v-else
+                :class="['asa-nav__item', { 'asa-nav__item--active': activeGroup === g.key }]"
+                type="button"
+                @click="selectGroup(g.key)"
+              >
+                <provider-logo :provider="g.key" :fallback="g.icon" :size="20" />
+                <span class="asa-nav__label">{{ g.name }}</span>
+                <span
+                  v-if="g.key !== GLOBAL_KEY"
+                  :class="['asa-nav__dot', { 'asa-nav__dot--on': isProviderEnabled(g.key) }]"
+                ></span>
+                <v-tooltip v-if="navCollapsed" activator="parent" location="right" :text="g.name" />
+              </button>
+            </template>
           </div>
 
           <!-- 分割线：功能栏（分组列表）与「插件帮助」分区 -->
@@ -122,7 +128,7 @@
                     <p v-if="field.hint">{{ field.hint }}</p>
                   </div>
                   <div class="asa-row__control">
-                    <dynamic-field :field="field" v-model="config.global[field.key]" />
+                    <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.global[field.key]" />
                   </div>
                 </div>
               </div>
@@ -161,6 +167,15 @@
                     <v-switch v-model="config.providers[activeGroup].enabled" color="primary" density="compact" hide-details inset />
                   </div>
                 </div>
+                <div class="asa-row asa-row--switch">
+                  <div class="asa-row__copy">
+                    <div class="asa-row__label">{{ t('sourceNotify') }}</div>
+                    <p>{{ t('sourceNotifyHint') }}</p>
+                  </div>
+                  <div class="asa-row__control">
+                    <v-switch v-model="config.providers[activeGroup].notify" color="primary" density="compact" hide-details inset />
+                  </div>
+                </div>
                 <div class="asa-row">
                   <div class="asa-row__copy">
                     <div class="asa-row__label">{{ t('cronLabel') }}</div>
@@ -190,7 +205,7 @@
                     <p v-if="field.hint">{{ field.hint }}</p>
                   </div>
                   <div class="asa-row__control">
-                    <dynamic-field :field="field" v-model="config.providers[activeGroup].options[field.key]" />
+                    <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].options[field.key]" />
                   </div>
                 </div>
               </div>
@@ -206,7 +221,7 @@
                     <p v-if="field.hint">{{ field.hint }}</p>
                   </div>
                   <div class="asa-row__control">
-                    <dynamic-field :field="field" v-model="config.providers[activeGroup].filters[field.key]" />
+                    <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].filters[field.key]" />
                   </div>
                 </div>
               </div>
@@ -227,7 +242,7 @@
                       <p v-if="field.hint">{{ field.hint }}</p>
                     </div>
                     <div class="asa-row__control">
-                      <dynamic-field :field="field" v-model="config.providers[activeGroup].options[field.key]" />
+                      <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].options[field.key]" />
                     </div>
                   </div>
                   <div v-for="field in advancedFilters(activeSpec)" :key="field.key" :class="rowClass(field)">
@@ -236,7 +251,7 @@
                       <p v-if="field.hint">{{ field.hint }}</p>
                     </div>
                     <div class="asa-row__control">
-                      <dynamic-field :field="field" v-model="config.providers[activeGroup].filters[field.key]" />
+                      <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].filters[field.key]" />
                     </div>
                   </div>
                 </div>
@@ -304,7 +319,7 @@
             <li>
               <v-icon icon="mdi-bell-outline" size="17" />
               <span>{{ t('ovNotify') }}</span>
-              <strong>{{ config.global.notify ? t('on') : t('off') }}</strong>
+              <strong>{{ notifyingCount }} / {{ providerSpecs.length }}</strong>
             </li>
             <li>
               <v-icon icon="mdi-database-check-outline" size="17" />
@@ -354,6 +369,7 @@
         </v-btn>
       </div>
     </transition>
+    </template>
   </section>
 </template>
 
@@ -362,8 +378,9 @@ import { computed, getCurrentInstance, onMounted, onUnmounted, reactive, ref, wa
 import DynamicField from './DynamicField.vue'
 import ProviderLogo from './ProviderLogo.vue'
 import PluginTabs from './PluginTabs.vue'
+import Page from './Page.vue'
 
-const HELP_URL = 'https://github.com/Aqr-K/MoviePilot-Plugins/blob/main/plugins.v2/automaticsubscriptionassistant/README.md'
+const HELP_URL = 'https://github.com/Aqr-K/MoviePilot-Plugins/blob/main/plugins.v3/automaticsubscriptionassistant/README.md'
 
 const props = defineProps({
   initialConfig: { type: Object, default: () => ({}) },
@@ -379,10 +396,10 @@ const GLOBAL_KEY = '__global__'
 const MSG = {
   'zh-CN': {
     plugin: '插件', title: '自动订阅助手', changes: '{n} 项改动', save: '保存', close: '关闭',
-    settingsGroups: '设置分组', globalHeading: '全局设置', globalDesc: '插件总开关、通知与订阅归属，作用于所有来源',
+    settingsGroups: '设置分组', mediaSources: '媒体', musicSources: '音乐', globalHeading: '全局设置', globalDesc: '插件总开关与订阅归属，作用于所有来源',
     secRunning: '运行', secSubscription: '订阅', secOneTime: '一次性维护',
     'g.enabled.label': '启用插件', 'g.enabled.hint': '总开关，关闭后所有定时任务停止',
-    'g.notify.label': '运行通知', 'g.notify.hint': '每次运行后发送消息通知',
+    sourceNotify: '运行通知', sourceNotifyHint: '发送该来源的运行结果或失败通知，不影响其他来源',
     'g.username.label': '订阅用户名', 'g.username.hint': '订阅记录归属的用户名',
     'g.exist_ok.label': '媒体库已存在仍订阅', 'g.exist_ok.hint': '媒体库已有资源时仍允许添加订阅',
     'g.history_keep.label': '历史保留条数', 'g.history_keep.hint': '每轮运行后只保留最近若干条历史，0 表示不限制',
@@ -396,7 +413,7 @@ const MSG = {
     secOptions: '抓取选项', secFilters: '过滤条件', advanced: '高级选项', advancedHint: '默认隐藏，谨慎修改',
     runNow: '立即运行一次', runTriggered: '已触发，将在 3 秒后运行', runFailed: '触发失败：', apiUnavailable: 'API 不可用',
     testConn: '连通性测试', testOk: '连通正常', testFail: '连通失败：', throttled: '操作过于频繁，请稍后再试',
-    overview: '概览', ovSources: '启用来源', ovNotify: '运行通知', ovExistOk: '已存在仍订阅', on: '开', off: '关',
+    overview: '概览', ovSources: '启用来源', ovNotify: '通知来源', ovExistOk: '已存在仍订阅', on: '开', off: '关',
     navHistory: '订阅历史', navBlacklist: '黑名单', navManage: '订阅管理', navConfig: '订阅配置',
     viewHistory: '查看订阅历史', unsaved: '{n} 项未保存', providersError: '获取来源列表失败，已按现有配置渲染：',
     help: '插件帮助', collapse: '收起侧栏', expand: '展开侧栏', runtimeTitle: '运行概览', back: '返回',
@@ -406,10 +423,10 @@ const MSG = {
   },
   'zh-TW': {
     plugin: '外掛', title: '自動訂閱助手', changes: '{n} 項變更', save: '儲存', close: '關閉',
-    settingsGroups: '設定分組', globalHeading: '全域設定', globalDesc: '外掛總開關、通知與訂閱歸屬，作用於所有來源',
+    settingsGroups: '設定分組', mediaSources: '媒體', musicSources: '音樂', globalHeading: '全域設定', globalDesc: '外掛總開關與訂閱歸屬，作用於所有來源',
     secRunning: '執行', secSubscription: '訂閱', secOneTime: '一次性維護',
     'g.enabled.label': '啟用外掛', 'g.enabled.hint': '總開關，關閉後所有定時任務停止',
-    'g.notify.label': '執行通知', 'g.notify.hint': '每次執行後傳送訊息通知',
+    sourceNotify: '執行通知', sourceNotifyHint: '傳送此來源的執行結果或失敗通知，不影響其他來源',
     'g.username.label': '訂閱使用者名稱', 'g.username.hint': '訂閱記錄歸屬的使用者名稱',
     'g.exist_ok.label': '媒體庫已存在仍訂閱', 'g.exist_ok.hint': '媒體庫已有資源時仍允許新增訂閱',
     'g.history_keep.label': '歷史保留筆數', 'g.history_keep.hint': '每輪執行後只保留最近若干筆歷史，0 表示不限制',
@@ -423,7 +440,7 @@ const MSG = {
     secOptions: '抓取選項', secFilters: '過濾條件', advanced: '進階選項', advancedHint: '預設隱藏，謹慎修改',
     runNow: '立即執行一次', runTriggered: '已觸發，將在 3 秒後執行', runFailed: '觸發失敗：', apiUnavailable: 'API 不可用',
     testConn: '連通性測試', testOk: '連通正常', testFail: '連通失敗：', throttled: '操作過於頻繁，請稍後再試',
-    overview: '概覽', ovSources: '啟用來源', ovNotify: '執行通知', ovExistOk: '已存在仍訂閱', on: '開', off: '關',
+    overview: '概覽', ovSources: '啟用來源', ovNotify: '通知來源', ovExistOk: '已存在仍訂閱', on: '開', off: '關',
     navHistory: '訂閱歷史', navBlacklist: '黑名單', navManage: '訂閱管理', navConfig: '訂閱設定',
     viewHistory: '檢視訂閱歷史', unsaved: '{n} 項未儲存', providersError: '取得來源列表失敗，已按現有設定渲染：',
     help: '外掛說明', collapse: '收合側欄', expand: '展開側欄', runtimeTitle: '執行概覽', back: '返回',
@@ -433,10 +450,10 @@ const MSG = {
   },
   'en-US': {
     plugin: 'Plugin', title: 'Auto Subscribe', changes: '{n} changed', save: 'Save', close: 'Close',
-    settingsGroups: 'Settings', globalHeading: 'Global settings', globalDesc: 'Master switch, notifications and subscription owner; applies to all sources',
+    settingsGroups: 'Settings', mediaSources: 'Media', musicSources: 'Music', globalHeading: 'Global settings', globalDesc: 'Master switch and subscription owner; applies to all sources',
     secRunning: 'Running', secSubscription: 'Subscription', secOneTime: 'One-time',
     'g.enabled.label': 'Enable plugin', 'g.enabled.hint': 'Master switch; off stops all scheduled tasks',
-    'g.notify.label': 'Run notifications', 'g.notify.hint': 'Send a message after each run',
+    sourceNotify: 'Run notifications', sourceNotifyHint: 'Send results or failures for this source independently',
     'g.username.label': 'Subscription user', 'g.username.hint': 'User the subscription records belong to',
     'g.exist_ok.label': 'Subscribe even if in library', 'g.exist_ok.hint': 'Allow adding subscriptions even when already in the library',
     'g.history_keep.label': 'History retention', 'g.history_keep.hint': 'Keep only the most recent N history entries after each run; 0 means unlimited',
@@ -450,7 +467,7 @@ const MSG = {
     secOptions: 'Fetch options', secFilters: 'Filters', advanced: 'Advanced', advancedHint: 'Hidden by default; edit with care',
     runNow: 'Run once now', runTriggered: 'Triggered; will run in 3s', runFailed: 'Trigger failed: ', apiUnavailable: 'API unavailable',
     testConn: 'Test connection', testOk: 'Connected', testFail: 'Connection failed: ', throttled: 'Too frequent, please retry later',
-    overview: 'Overview', ovSources: 'Enabled sources', ovNotify: 'Notifications', ovExistOk: 'Subscribe if exists', on: 'On', off: 'Off',
+    overview: 'Overview', ovSources: 'Enabled sources', ovNotify: 'Sources with notifications', ovExistOk: 'Subscribe if exists', on: 'On', off: 'Off',
     navHistory: 'History', navBlacklist: 'Blacklist', navManage: 'Manage', navConfig: 'Settings',
     viewHistory: 'View history', unsaved: '{n} unsaved', providersError: 'Failed to load sources; rendered from current config: ',
     help: 'Plugin help', collapse: 'Collapse', expand: 'Expand', runtimeTitle: 'Run overview', back: 'Back',
@@ -474,14 +491,16 @@ function t(k, p) {
   return s
 }
 
-const GLOBAL_DEFAULTS = { enabled: false, notify: false, exist_ok: true, username: '自动订阅助手', onlyonce: false, clear: false }
+const GLOBAL_DEFAULTS = { enabled: false, exist_ok: true, history_keep: 0, username: '自动订阅助手', onlyonce: false, clear: false }
 const GLOBAL_SECTIONS = [
-  { titleKey: 'secRunning', fields: [{ key: 'enabled', kind: 'switch' }, { key: 'notify', kind: 'switch' }] },
+  { titleKey: 'secRunning', fields: [{ key: 'enabled', kind: 'switch' }] },
   { titleKey: 'secSubscription', fields: [{ key: 'username', kind: 'text' }, { key: 'exist_ok', kind: 'switch' }] },
   { titleKey: 'secHistory', fields: [{ key: 'history_keep', kind: 'number' }] },
   { titleKey: 'secOneTime', fields: [{ key: 'onlyonce', kind: 'switch' }, { key: 'clear', kind: 'switch' }] },
 ]
 const PROVIDER_ICONS = {
+  anilist: 'mdi-animation-play-outline', spotify: 'mdi-spotify', applemusic: 'mdi-apple',
+  netease: 'mdi-music-circle-outline', qqmusic: 'mdi-music-note-circle',
   douban: 'mdi-movie-open-outline', maoyan: 'mdi-ticket-confirmation-outline', popular: 'mdi-fire',
   mikan: 'mdi-television-classic', netflix: 'mdi-play-box-outline',
 }
@@ -524,17 +543,16 @@ onMounted(() => {
 })
 onUnmounted(() => { if (navRO) { navRO.disconnect(); navRO = null } })
 
-// 顶部三标签（与订阅历史/管理一致）。点历史/管理：记忆目标视图并切回数据页（宿主在 Page 与 Config 间切换）。
+// 显式点击在当前配置窗口中切换，不持久保存入口页签。
 const tabDefs = computed(() => [
   { key: 'history', label: t('navHistory'), icon: 'mdi-history' },
   { key: 'manage', label: t('navManage'), icon: 'mdi-bell-cog-outline' },
   { key: 'blacklist', label: t('navBlacklist'), icon: 'mdi-cancel' },
   { key: 'config', label: t('navConfig'), icon: 'mdi-cog-outline' },
 ])
+const navigationView = ref('')
 function onTab(key) {
-  if (key === 'config') return
-  try { localStorage.setItem('asa.pageView', key) } catch { /* ignore */ }
-  emit('switch')
+  if (['history', 'manage', 'blacklist'].includes(key)) navigationView.value = key
 }
 
 // 移动端窗口式导航：先展示功能栏，点选渠道后进入对应配置页，返回回到功能栏（桌面端不影响）
@@ -592,7 +610,7 @@ function deepClone(obj) { try { return JSON.parse(JSON.stringify(obj ?? {})) } c
 
 const initClone = deepClone(props.initialConfig)
 const config = reactive({
-  global: { ...GLOBAL_DEFAULTS, ...(initClone.global || {}) },
+  global: Object.fromEntries(Object.entries(GLOBAL_DEFAULTS).map(([key, value]) => [key, initClone.global?.[key] ?? value])),
   providers: initClone.providers && typeof initClone.providers === 'object' ? initClone.providers : {},
 })
 
@@ -601,12 +619,29 @@ const globalSections = computed(() => GLOBAL_SECTIONS.map(s => ({
   fields: s.fields.map(f => ({ key: f.key, kind: f.kind, label: t(`g.${f.key}.label`), hint: t(`g.${f.key}.hint`) })),
 })))
 
-const groups = computed(() => [
-  { key: GLOBAL_KEY, name: t('globalHeading'), icon: 'mdi-tune-variant' },
-  ...providerSpecs.value.map(s => ({ key: s.provider_id, name: s.provider_name || s.provider_id, icon: groupIcon(s.provider_id) })),
-])
+const PROVIDER_ORDER = ['douban', 'maoyan', 'popular', 'mikan', 'netflix', 'anilist', 'spotify', 'applemusic', 'netease', 'qqmusic']
+const MUSIC_PROVIDERS = new Set(['spotify', 'applemusic', 'netease', 'qqmusic'])
+const groups = computed(() => {
+  const order = pid => {
+    const index = PROVIDER_ORDER.indexOf(pid)
+    return index < 0 ? PROVIDER_ORDER.length : index
+  }
+  const providers = [...providerSpecs.value].sort((a, b) => order(a.provider_id) - order(b.provider_id))
+  const sections = [
+    { key: 'media', name: t('mediaSources'), items: providers.filter(s => !MUSIC_PROVIDERS.has(s.provider_id)) },
+    { key: 'music', name: t('musicSources'), items: providers.filter(s => MUSIC_PROVIDERS.has(s.provider_id)) },
+  ]
+  return [
+    { key: GLOBAL_KEY, name: t('globalHeading'), icon: 'mdi-tune-variant' },
+    ...sections.filter(section => section.items.length).flatMap(section => [
+      { key: `section:${section.key}`, name: section.name, heading: true },
+      ...section.items.map(s => ({ key: s.provider_id, name: s.provider_name || s.provider_id, icon: groupIcon(s.provider_id) })),
+    ]),
+  ]
+})
 const activeSpec = computed(() => providerSpecs.value.find(s => s.provider_id === activeGroup.value) || null)
 const enabledCount = computed(() => providerSpecs.value.filter(s => isProviderEnabled(s.provider_id)).length)
+const notifyingCount = computed(() => providerSpecs.value.filter(s => config.providers[s.provider_id]?.notify).length)
 
 const changedCount = computed(() => {
   if (!snapshot.value) return 0
@@ -631,11 +666,18 @@ function ensureProviderConfig(spec) {
   if (!config.providers[pid] || typeof config.providers[pid] !== 'object') config.providers[pid] = {}
   const pc = config.providers[pid]
   if (typeof pc.enabled !== 'boolean') pc.enabled = false
+  if (typeof pc.notify !== 'boolean') pc.notify = false
   if (!pc.cron) pc.cron = spec.default_cron || ''
   if (!pc.options || typeof pc.options !== 'object') pc.options = {}
   if (!pc.filters || typeof pc.filters !== 'object') pc.filters = {}
-  ;(spec.options_schema || []).forEach(f => { if (pc.options[f.key] === undefined) pc.options[f.key] = f.default })
-  ;(spec.filters_schema || []).forEach(f => { if (pc.filters[f.key] === undefined) pc.filters[f.key] = f.default })
+  const ruleField = (spec.options_schema || []).find(f => f.kind === 'rule-list')
+  const optionKeys = new Set((spec.options_schema || []).map(f => f.key))
+  if (ruleField && pc.options[ruleField.key] === undefined &&
+      (Object.keys(pc.options).some(key => !optionKeys.has(key)) || Object.keys(pc.filters).length)) {
+    pc.options[ruleField.key] = []
+  }
+  pc.options = Object.fromEntries((spec.options_schema || []).map(f => [f.key, pc.options[f.key] === undefined ? deepClone(f.default) : pc.options[f.key]]))
+  pc.filters = Object.fromEntries((spec.filters_schema || []).map(f => [f.key, pc.filters[f.key] === undefined ? deepClone(f.default) : pc.filters[f.key]]))
 }
 
 function inferProvidersFromConfig() {
@@ -680,7 +722,7 @@ function toggleAdvanced(pid) { showAdvanced[pid] = !showAdvanced[pid] }
 function rowClass(field) {
   return ['asa-row', {
     'asa-row--switch': field.kind === 'switch',
-    'asa-row--wide': field.kind === 'textarea' || field.kind === 'region-media-map',
+    'asa-row--wide': ['textarea', 'rule-list'].includes(field.kind),
   }]
 }
 
@@ -801,8 +843,19 @@ onMounted(() => { loadProviders(); loadStatus() })
 .asa-cfg-body { padding: 18px 18px 24px; }
 .asa-cfg-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 
-.asa-nav { display: flex; flex-direction: column; gap: 4px; min-inline-size: 0; }
-.asa-nav__list { display: flex; flex-direction: column; gap: 3px; min-block-size: 0; }
+.asa-nav { display: flex; flex-direction: column; gap: 4px; inline-size: max-content; min-inline-size: 0; }
+.asa-nav__list { display: flex; flex-direction: column; gap: 3px; inline-size: max-content; min-inline-size: 100%; min-block-size: 0; }
+.asa-nav__section {
+  flex: 0 0 34px; block-size: 34px;
+  display: flex; align-items: center; gap: 8px; padding: 12px 6px 5px;
+  color: rgba(var(--v-theme-on-surface), 0.48); font-size: 0.7rem; font-weight: 600;
+  white-space: nowrap;
+}
+.asa-nav__section::before, .asa-nav__section::after {
+  content: ''; block-size: 1px; background: rgba(var(--v-theme-on-surface), 0.12);
+}
+.asa-nav__section::before { flex: 0 0 12px; }
+.asa-nav__section::after { flex: 1 1 auto; }
 .asa-nav__top { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px 8px; }
 .asa-nav__heading { color: rgba(var(--v-theme-on-surface), 0.5); font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
 .asa-nav__collapse {
@@ -812,14 +865,14 @@ onMounted(() => { loadProviders(); loadStatus() })
 }
 .asa-nav__collapse:hover { background: rgba(var(--v-theme-on-surface), 0.06); color: rgb(var(--v-theme-primary)); }
 .asa-nav__item {
-  display: flex; align-items: center; gap: 12px; min-block-size: 46px; padding: 0 12px;
+  display: flex; align-items: center; gap: 12px; min-inline-size: max-content; min-block-size: 46px; padding: 0 12px;
   border: 0; border-radius: 10px; background: transparent; color: rgba(var(--v-theme-on-surface), 0.78);
   font-size: 0.85rem; font-weight: 600; text-align: start; text-decoration: none; cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .asa-nav__item:hover { background: rgba(var(--v-theme-on-surface), 0.05); }
 .asa-nav__item--active { background: rgba(var(--v-theme-primary), 0.1); color: rgb(var(--v-theme-primary)); }
-.asa-nav__label { flex: 1 1 auto; overflow: hidden; white-space: nowrap; }
+.asa-nav__label { flex: 1 0 auto; white-space: nowrap; }
 .asa-nav__dot { flex: 0 0 auto; inline-size: 8px; block-size: 8px; border-radius: 50%; background: rgba(var(--v-theme-on-surface), 0.22); transition: opacity 0.16s ease; }
 .asa-nav__dot--on { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 3px rgba(var(--v-theme-success), 0.16); }
 /* 功能栏（分组列表）与「插件帮助」之间的分割线 */
@@ -828,14 +881,18 @@ onMounted(() => { loadProviders(); loadStatus() })
 .asa-nav__help { flex: 0 0 auto; text-decoration: none; color: rgba(var(--v-theme-on-surface), 0.72); }
 .asa-nav__help-ico { color: rgba(var(--v-theme-on-surface), 0.5); }
 
-/* 收起：仅图标（标签宽度动画收合，流畅不卡顿；图标居中于预选框） */
+/* 收起只改变横向尺寸，分组行保留高度，避免后续来源位置跳动。 */
+.asa-nav--collapsed { inline-size: 44px; }
 .asa-nav--collapsed .asa-nav__heading { display: none; }
 .asa-nav--collapsed .asa-nav__top { justify-content: center; padding-inline: 0; }
-.asa-nav--collapsed .asa-nav__list { align-items: center; }
+.asa-nav--collapsed .asa-nav__list { align-items: center; inline-size: 44px; min-inline-size: 0; }
+.asa-nav--collapsed .asa-nav__section { inline-size: 44px; gap: 0; padding-inline: 0; }
+.asa-nav--collapsed .asa-nav__section > span,
+.asa-nav--collapsed .asa-nav__section::before { display: none; }
 .asa-nav--collapsed .asa-nav__label { display: none; }
 .asa-nav--collapsed .asa-nav__dot { display: none; }
 .asa-nav--collapsed .asa-nav__item,
-.asa-nav--collapsed .asa-nav__collapse { inline-size: 44px; padding-inline: 0; justify-content: center; gap: 0; }
+.asa-nav--collapsed .asa-nav__collapse { inline-size: 44px; min-inline-size: 44px; padding-inline: 0; justify-content: center; gap: 0; }
 @media (prefers-reduced-motion: reduce) {
   .asa-nav__label { transition: none; }
 }
@@ -967,10 +1024,13 @@ onMounted(() => { loadProviders(); loadStatus() })
   /* 渠道列表可内部滚动，帮助钉在左下角、与列表分区，渠道再多也不叠加 */
   .asa-nav__list {
     flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; min-block-size: 0;
+    padding-inline-end: 6px; scrollbar-gutter: stable;
     scrollbar-width: thin; scrollbar-color: rgba(var(--v-theme-on-surface), 0.22) transparent;
   }
   .asa-nav__list::-webkit-scrollbar { inline-size: 6px; }
   .asa-nav__list::-webkit-scrollbar-thumb { background: rgba(var(--v-theme-on-surface), 0.18); border-radius: 3px; }
+  .asa-nav--collapsed .asa-nav__list { padding-inline-end: 0; scrollbar-gutter: auto; scrollbar-width: none; }
+  .asa-nav--collapsed .asa-nav__list::-webkit-scrollbar { inline-size: 0; }
   .asa-nav__help { flex: 0 0 auto; margin-block-start: 10px; }
   .asa-surface {
     grid-area: content; overflow-y: auto; overscroll-behavior: contain;
@@ -1007,6 +1067,8 @@ onMounted(() => { loadProviders(); loadStatus() })
   .asa-aside-scrim { display: block; position: fixed; z-index: 29; inset: 0; background: rgba(0, 0, 0, 0.42); }
 }
 @container (width < 680px) {
+  .asa-nav, .asa-nav__list { inline-size: 100%; min-inline-size: 0; }
+  .asa-nav__item { min-inline-size: 0; }
   .asa-row { grid-template-columns: minmax(0, 1fr) minmax(130px, 0.8fr); gap: 12px; align-items: center; }
   .asa-row--wide { grid-template-columns: minmax(0, 1fr); }
   /* 移动端窗口式导航：功能栏 / 配置页二选一显示，点选进入、返回回到功能栏 */

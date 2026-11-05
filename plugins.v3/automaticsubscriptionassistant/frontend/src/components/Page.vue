@@ -15,7 +15,7 @@
       </div>
       <div class="asa-pg-head__actions">
         <v-btn :loading="loading" :aria-label="t('refresh')" icon="mdi-refresh" size="small" variant="text" @click="reloadCurrent" />
-        <v-btn :aria-label="t('close')" icon="mdi-close" size="small" variant="text" @click="emit('close')" />
+        <v-btn v-if="!sidebar" :aria-label="t('close')" icon="mdi-close" size="small" variant="text" @click="emit('close')" />
       </div>
     </header>
 
@@ -283,7 +283,6 @@ const props = defineProps({
 const emit = defineEmits(['switch', 'close', 'action'])
 
 const PLUGIN = 'plugin/AutomaticSubscriptionAssistant'
-const VIEW_KEY = 'asa.pageView'
 const THEME_COLORS = { primary: 1, secondary: 1, success: 1, info: 1, warning: 1, error: 1 }
 
 const STATUS_META = {
@@ -299,13 +298,13 @@ const STATUS_META = {
 const STAT_ORDER = ['subscribed', 'media_exists', 'subscription_exists', 'blacklisted', 'filtered', 'unrecognized', 'error']
 
 const MSG = {
-  'zh-CN': {
+  'zh-CN': { kRules: '命中规则', artist: '艺术家', albumType: '专辑', recordingType: '单曲',
     supplement: '补充编辑', blacklist: '黑名单', blacklistAdd: '加入黑名单', 'st.blacklisted': '已忽略', plugin: '插件', appTitle: '自动订阅助手', title: '订阅历史', manageTitle: '订阅管理', config: '订阅配置',
     records: '共 {n} 条记录', refresh: '刷新', close: '关闭', searchPh: '搜索名称…',
     filterSource: '来源', filterStatus: '状态', filterType: '类型', clearFilters: '清除筛选',
     filter: '筛选', filterTitle: '筛选与搜索', filterYear: '发行年份', yearFrom: '起始年', yearTo: '结束年',
     filterAll: '全部', searchLabel: '搜索', applyFilter: '应用', resetFilter: '重置',
-    'mt.movie': '电影', 'mt.tv': '剧集',
+    'mt.music': '音乐', 'mt.movie': '电影', 'mt.tv': '剧集',
     select: '多选', exitSelect: '退出多选', selectedN: '已选 {n} 项', batchDelete: '批量删除',
     selLoaded: '选择已加载', selPage: '选本页', selAll: '选全部（{n}）', selClear: '清除选择',
     emptyFiltered: '没有符合筛选条件的记录', emptyFilteredHint: '试试调整搜索或筛选条件',
@@ -318,13 +317,13 @@ const MSG = {
     'st.subscribed': '已订阅', 'st.media_exists': '媒体库已存在', 'st.subscription_exists': '订阅已存在',
     'st.filtered': '被过滤', 'st.unrecognized': '未识别', 'st.already_handled': '已处理', 'st.error': '异常',
   },
-  'zh-TW': {
+  'zh-TW': { kRules: '命中規則', artist: '藝術家', albumType: '專輯', recordingType: '單曲',
     supplement: '補充編輯', blacklist: '黑名單', blacklistAdd: '加入黑名單', 'st.blacklisted': '已忽略', plugin: '外掛', appTitle: '自動訂閱助手', title: '訂閱歷史', manageTitle: '訂閱管理', config: '訂閱設定',
     records: '共 {n} 筆記錄', refresh: '重新整理', close: '關閉', searchPh: '搜尋名稱…',
     filterSource: '來源', filterStatus: '狀態', filterType: '類型', clearFilters: '清除篩選',
     filter: '篩選', filterTitle: '篩選與搜尋', filterYear: '發行年份', yearFrom: '起始年', yearTo: '結束年',
     filterAll: '全部', searchLabel: '搜尋', applyFilter: '套用', resetFilter: '重設',
-    'mt.movie': '電影', 'mt.tv': '劇集',
+    'mt.music': '音樂', 'mt.movie': '電影', 'mt.tv': '劇集',
     select: '多選', exitSelect: '退出多選', selectedN: '已選 {n} 項', batchDelete: '批量刪除',
     selLoaded: '選擇已載入', selPage: '選本頁', selAll: '選全部（{n}）', selClear: '清除選擇',
     emptyFiltered: '沒有符合篩選條件的記錄', emptyFilteredHint: '試試調整搜尋或篩選條件',
@@ -337,13 +336,13 @@ const MSG = {
     'st.subscribed': '已訂閱', 'st.media_exists': '媒體庫已存在', 'st.subscription_exists': '訂閱已存在',
     'st.filtered': '被過濾', 'st.unrecognized': '未識別', 'st.already_handled': '已處理', 'st.error': '異常',
   },
-  'en-US': {
+  'en-US': { kRules: 'Matched rules', artist: 'Artist', albumType: 'Album', recordingType: 'Song',
     supplement: 'Edit and subscribe', blacklist: 'Blacklist', blacklistAdd: 'Add to blacklist', 'st.blacklisted': 'Ignored', plugin: 'Plugin', appTitle: 'Auto Subscribe', title: 'History', manageTitle: 'Manage', config: 'Settings',
     records: '{n} records', refresh: 'Refresh', close: 'Close', searchPh: 'Search name…',
     filterSource: 'Source', filterStatus: 'Status', filterType: 'Type', clearFilters: 'Clear filters',
     filter: 'Filters', filterTitle: 'Filter & search', filterYear: 'Release year', yearFrom: 'From', yearTo: 'To',
     filterAll: 'All', searchLabel: 'Search', applyFilter: 'Apply', resetFilter: 'Reset',
-    'mt.movie': 'Movies', 'mt.tv': 'TV series',
+    'mt.music': 'Music', 'mt.movie': 'Movies', 'mt.tv': 'TV series',
     select: 'Select', exitSelect: 'Done', selectedN: '{n} selected', batchDelete: 'Delete',
     selLoaded: 'Loaded items', selPage: 'This page', selAll: 'All ({n})', selClear: 'Clear',
     emptyFiltered: 'No records match the filters', emptyFilteredHint: 'Try adjusting the search or filters',
@@ -383,7 +382,7 @@ function openSupplement(item) { supplementTarget.value = item; supplementOpen.va
 async function refreshSupplement() { await Promise.all([fetchStatus(), fetchHistory(true)]) }
 const blacklistTarget = ref({})
 function openBlacklist(item) { blacklistTarget.value = { ...item, kind: 'history' }; blacklistOpen.value = true }
-const view = ref(props.initialView || readInitialView())
+const view = ref(['history', 'manage', 'blacklist'].includes(props.initialView) ? props.initialView : 'history')
 const loading = ref(true)
 const error = ref('')
 const items = ref([])
@@ -416,15 +415,6 @@ const recognizing = reactive(new Set())  // 正在「重新识别」的记录 un
 const confirm = reactive({ open: false, ids: [] })
 const deletingBatch = ref(false)
 
-// 一次性读取目标视图：仅当由「订阅配置」标签跳回时携带；读后即清，保证下次打开始终默认订阅历史。
-function readInitialView() {
-  try {
-    const v = localStorage.getItem(VIEW_KEY)
-    if (v === 'manage' || v === 'history' || v === 'blacklist') { localStorage.removeItem(VIEW_KEY); return v }
-  } catch { /* ignore */ }
-  return 'history'
-}
-
 const ROW_OPTIONS = [10, 25, 50, 100]
 const ROWS_KEY = 'asa.mobileRows'
 function readRows() {
@@ -454,7 +444,7 @@ const historyLoadedPage = ref(0)
 const historyExhausted = ref(false)
 const historyHasMore = computed(() => !historyExhausted.value && items.value.length < total.value)
 
-const showSwitch = computed(() => props.show_switch)
+const showSwitch = computed(() => !props.sidebar && props.show_switch)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const activePageCount = computed(() => (view.value === 'history' ? pageCount.value : view.value === 'blacklist' ? blacklistCount.value : manageCount.value))
 // 移动端不锁死 total-visible → v-pagination 依据自身容器宽度自动截断（永远含首尾页）；桌面维持 5。
@@ -484,6 +474,7 @@ const statusSelectItems = computed(() => STAT_ORDER.map(key => ({ title: t('st.'
 const typeSelectItems = computed(() => [
   { title: t('mt.movie'), value: '电影' },
   { title: t('mt.tv'), value: '电视剧' },
+  { title: t('mt.music'), value: '音乐' },
 ])
 // FilterPanel 字段配置（历史）：类型多选、状态多选、来源多选 + 发行年份范围 + 搜索。
 const historyFilterFields = computed(() => [
@@ -511,9 +502,12 @@ function mediaName(item) {
   return parts.join(' · ')
 }
 function cardLines(item) {
+  const matches = [...new Set((item.source_item?.source_meta?.matches || []).map(m => m.name).filter(Boolean))]
   return [
-    { icon: 'mdi-shape-outline', label: t('kType'), value: item.type || t('unknown') },
+    { icon: 'mdi-shape-outline', label: t('kType'), value: item.type === '音乐' ? `${item.type} · ${item.music_type === 'album' ? t('albumType') : t('recordingType')}` : item.type || t('unknown') },
+    ...(item.type === '音乐' && item.artists?.length ? [{ icon: 'mdi-account-music', label: t('artist'), value: item.artists.join(' / ') }] : []),
     { icon: 'mdi-rss', label: t('kSource'), value: providerName(item.provider) },
+    ...(matches.length ? [{ icon: 'mdi-filter-check-outline', label: t('kRules'), value: matches.join(' / ') }] : []),
     { icon: 'mdi-clock-outline', label: t('kTime'), value: item.time || t('unknown') },
     { icon: 'mdi-calendar', label: t('kYear'), value: item.year || t('unknown') },
   ]
@@ -612,7 +606,7 @@ async function fetchStatus() {
 
 function onTab(key) {
   if (key === 'config') {
-    try { localStorage.setItem(VIEW_KEY, view.value) } catch { /* ignore */ }
+    if (!showSwitch.value) return
     emit('switch')
     return
   }

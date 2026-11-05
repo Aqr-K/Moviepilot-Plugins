@@ -8,7 +8,7 @@ from app.schemas.types import MediaType
 from .config import GlobalConfig
 from .executor import SubscribeExecutor
 from .filters import FilterChain
-from .models import RankMediaItem
+from ..schemas import RankMediaItem
 
 _SUBMIT_LOCK = Lock()
 _OPTIONS = frozenset({
@@ -16,7 +16,7 @@ _OPTIONS = frozenset({
     "search_interval", "total_episode", "start_episode", "best_version", "best_version_full",
     "include", "exclude", "filter_groups",
 })
-_MEDIA_FIELDS = frozenset({"title", "type", "year", "season", "episode_group", "media_source", "media_id"})
+_MEDIA_FIELDS = frozenset({"title", "type", "year", "season", "episode_group", "media_source", "media_id", "music_type", "artists", "album", "isrc"})
 
 
 def parse_supplement(record: dict, request: dict):
@@ -37,13 +37,17 @@ def parse_supplement(record: dict, request: dict):
     title = media.get("title")
     if not isinstance(title, str) or not 1 <= len(title.strip()) <= 300:
         raise ValueError("请填写影视名称（最多 300 字）")
-    if media.get("type") not in (MediaType.MOVIE.value, MediaType.TV.value):
-        raise ValueError("请选择电影或电视剧")
+    if media.get("type") not in (MediaType.MOVIE.value, MediaType.TV.value, MediaType.MUSIC.value):
+        raise ValueError("请选择电影、电视剧或音乐")
     source = media.get("media_source") or None
     media_id = media.get("media_id")
     media_id = str(media_id).strip() if media_id is not None else None
     if bool(source) != bool(media_id):
         raise ValueError("媒体来源与媒体 ID 必须同时填写或同时留空")
+    is_music = media["type"] == MediaType.MUSIC.value
+    if is_music and (media.get("music_type") not in {"recording", "album"} or not isinstance(media.get("artists"), list)
+                     or not media["artists"] or not all(isinstance(name, str) and name.strip() for name in media["artists"])):
+        raise ValueError("音乐必须填写单曲/专辑类型及艺术家")
     if isinstance(media.get("season"), bool):
         raise ValueError("季号必须为非负整数")
     data = Subscribe(name=title.strip(), type=media["type"], year=media.get("year") or None,
@@ -77,7 +81,9 @@ def parse_supplement(record: dict, request: dict):
     # 不恢复旧候选中的其他 ID，用户清空身份后确实会按新名称、类型和年份重新识别。
     item = RankMediaItem(title=data.name, year=data.year, type_hint=MediaType(data.type),
                          media_source=data.media_source, media_id=data.media_id, season=data.season,
-                         episode_group=data.episode_group, poster=record.get("poster"))
+                         episode_group=data.episode_group, poster=record.get("poster"),
+                         music_type=media.get("music_type") if is_music else None, artists=media.get("artists", []) if is_music else [],
+                         album=media.get("album") if is_music else None, isrc=media.get("isrc") if is_music else None)
     parsed_options = {key: getattr(data, key) for key in options}
     return item, parsed_options, request.get("exist_ok")
 

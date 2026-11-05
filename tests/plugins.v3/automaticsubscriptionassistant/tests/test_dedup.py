@@ -12,7 +12,7 @@ from app.plugins.automaticsubscriptionassistant.core.dedup import (
     SubscribedIndex,
     build_subscribed_index,
 )
-from app.plugins.automaticsubscriptionassistant.core.models import RankMediaItem, media_identity
+from app.plugins.automaticsubscriptionassistant.schemas import RankMediaItem, media_identity
 
 
 # --------------------------------------------------------------------------- #

@@ -543,7 +543,7 @@ test('订阅卡片向宿主管理入口只传操作和订阅 ID，保存后才�
     assert(!('media_id' in requests[0]))
     assert.equal(gets.length, 0)
     await requests[0].onChanged()
-    assert.deepEqual(gets, ['plugin/AutomaticSubscriptionAssistant/subscribes'])
+    assert.deepEqual(gets, ['plugin/AutomaticSubscriptionAssistant/subscribes?lang=zh-CN'])
     assert(view.events.some(([event]) => event === 'changed'))
   } finally { view.dispose() }
 })
@@ -713,4 +713,230 @@ test('补充编辑卸载后不处理迟到创建响应', async () => {
     await request
     assert.equal(dialog.events.length, 0)
   } finally { dialog.dispose() }
+})
+
+test('订阅管理卡片显示榜单来源，缺失来源时不冒充插件名', () => {
+  const view = component('SubscribeView', { api: {}, pageSize: 12, page: 1 }, ['cardLines'])
+  try {
+    const source = item => view.cardLines(item).find(line => line.label === '榜单来源')
+    assert.equal(source({ provider: 'douban', provider_name: '豆瓣榜单' }).value, '豆瓣榜单')
+    assert.equal(source({ provider: 'extension-rank' }).value, 'extension-rank')
+    assert.equal(source({}).value, '未知')
+    assert.equal(source({}).icon, 'mdi-rss')
+  } finally { view.dispose() }
+})
+
+test('订阅来源使用当前语言，旧请求不会覆盖较新来源结果', async () => {
+  const first = deferred(), second = deferred()
+  const requests = []
+  const view = component('SubscribeView', { api: { get: url => { requests.push(url); return requests.length === 1 ? first.promise : second.promise } }, pageSize: 12, page: 1 },
+    ['fetchSubs', 'rows', 'loading'], { getCurrentInstance: () => ({ appContext: { config: { globalProperties: { $i18n: { locale: 'en-US' } } } } }) })
+  try {
+    const old = view.fetchSubs(), current = view.fetchSubs()
+    assert(requests.every(url => url.endsWith('/subscribes?lang=en-US')))
+    second.resolve({ list: [{ id: 7, provider: 'netflix', provider_name: 'Netflix Top 10' }] })
+    await current
+    first.resolve({ list: [{ id: 7, provider: 'douban', provider_name: 'Douban Rankings' }] })
+    await old
+    assert.equal(view.rows.value[0].provider, 'netflix')
+    assert.equal(view.loading.value, false)
+  } finally { view.dispose() }
+})
+
+const rankedSubscriptions = () => [
+  { id: 1, name: '测试剧 第一季', provider: 'douban', provider_name: '豆瓣榜单', type: '电视剧', year: '2025', state: 'R' },
+  { id: 2, name: '测试剧 第二季', provider: 'netflix', provider_name: '奈飞榜单', type: '电视剧', year: '2026', state: 'S' },
+  { id: 3, name: '测试电影', provider: 'douban', provider_name: '豆瓣榜单', type: '电影', year: '2024', state: 'R' },
+  { id: 4, name: '其他剧', provider: 'mikan', provider_name: 'Mikan 季度新番', type: '电视剧', year: '2026', state: 'R' },
+  { id: 5, name: '未知归属', provider: null, type: '电影', year: '2026', state: 'R' },
+  { id: 6, name: '旧版订阅', type: '电影', year: '2026', state: 'P' },
+]
+
+function rankedSubscriptionView(exports, overrides = {}) {
+  return component('SubscribeView', { api: { get: async () => ({ list: rankedSubscriptions() }) }, pageSize: 1, page: 1 },
+    ['fetchSubs', 'filters', 'filtered', 'providerItems', 'activeFilterCount', ...exports], overrides)
+}
+
+test('订阅来源多选与其他条件组合过滤，全选仅选中匹配的榜单订阅', async () => {
+  const view = rankedSubscriptionView(['pageCount', 'selectAll', 'selected', 'filterFields', 'clearFilters'])
+  try {
+    await view.fetchSubs()
+    assert.deepEqual(view.providerItems.value.map(item => item.title), ['豆瓣榜单 (2)', '奈飞榜单 (1)', 'Mikan 季度新番 (1)', '未知 (2)'])
+    const field = view.filterFields.value.find(item => item.key === 'providers')
+    assert.equal(field.multi, true)
+    assert.equal(field.label, '榜单来源')
+    view.filters.providers = ['douban', 'netflix']
+    assert.deepEqual(view.filtered.value.map(item => item.id), [1, 2, 3])
+    assert.equal(view.pageCount.value, 3)
+    assert.equal(view.activeFilterCount.value, 1)
+    Object.assign(view.filters, { keyword: '测试剧', mtype: '电视剧', statuses: ['R'], yearMin: 2025, yearMax: 2026 })
+    assert.deepEqual(view.filtered.value.map(item => item.id), [1])
+    view.selectAll()
+    assert.deepEqual([...view.selected], [1])
+    const unknown = view.providerItems.value.find(item => item.title === '未知 (2)').value
+    view.clearFilters()
+    view.filters.providers = [unknown]
+    assert.deepEqual(view.filtered.value.map(item => item.id), [5, 6])
+    view.filters.providers = []
+    assert.equal(view.filtered.value.length, 6)
+  } finally { view.dispose() }
+})
+
+test('榜单来源草稿可取消，应用后复位页码，重置与清除不会留下旧来源', async () => {
+  const view = rankedSubscriptionView(['draft', 'filterDialog', 'openFilterDialog', 'applyFilterDialog', 'resetDraft', 'clearFilters'])
+  try {
+    await view.fetchSubs()
+    view.filters.providers = ['douban']
+    await Vue.nextTick()
+    view.openFilterDialog()
+    view.draft.providers.push('netflix')
+    view.filterDialog.value = false
+    assert.deepEqual(view.filters.providers, ['douban'])
+    view.openFilterDialog()
+    assert.deepEqual(view.draft.providers, ['douban'])
+    view.draft.providers = ['netflix']
+    const before = view.events.length
+    view.applyFilterDialog()
+    await Vue.nextTick()
+    assert.deepEqual(view.filters.providers, ['netflix'])
+    assert.equal(view.activeFilterCount.value, 1)
+    assert(view.events.slice(before).some(([event, page]) => event === 'update:page' && page === 1))
+    view.openFilterDialog()
+    view.resetDraft()
+    assert.deepEqual(view.draft.providers, [])
+    assert.deepEqual(view.filters.providers, ['netflix'])
+    view.applyFilterDialog()
+    assert.deepEqual(view.filters.providers, [])
+    view.filters.providers = ['douban']
+    view.clearFilters()
+    assert.equal(view.activeFilterCount.value, 0)
+    view.openFilterDialog()
+    assert.deepEqual(view.draft.providers, [])
+  } finally { view.dispose() }
+})
+
+test('榜单名称本地化更新后，已选来源仍按稳定 ID 匹配', async () => {
+  const i18n = Vue.reactive({ locale: 'zh-CN' })
+  const view = component('SubscribeView', { api: { get: async url => ({ list: rankedSubscriptions().map(row => ({
+    ...row, provider_name: url.endsWith('lang=en-US') && row.provider === 'douban' ? 'Douban Rankings' : row.provider_name,
+  })) }) }, pageSize: 12, page: 1 }, ['fetchSubs', 'filters', 'filtered', 'providerItems'],
+    { getCurrentInstance: () => ({ appContext: { config: { globalProperties: { $i18n: i18n } } } }) })
+  try {
+    await view.fetchSubs()
+    view.filters.providers = ['douban']
+    i18n.locale = 'en-US'
+    await Vue.nextTick()
+    await Promise.resolve()
+    await Vue.nextTick()
+    assert.equal(view.providerItems.value[0].title, 'Douban Rankings (2)')
+    assert.deepEqual(view.filtered.value.map(row => row.id), [1, 3])
+  } finally { view.dispose() }
+})
+
+test('sidebar hides configuration even when show_switch defaults true', () => {
+  const page = component('Page', { api: {}, sidebar: true, show_switch: true }, ['tabDefs', 'onTab', 'view'])
+  try {
+    assert.deepEqual(page.tabDefs.value.map(tab => tab.key), ['history', 'manage', 'blacklist'])
+    const before = page.view.value
+    page.onTab('config')
+    assert.equal(page.view.value, before)
+    assert.deepEqual(page.events, [])
+  } finally { page.dispose() }
+})
+
+test('plugin dialog keeps configuration entry', () => {
+  const page = component('Page', { api: {}, sidebar: false, show_switch: true }, ['tabDefs', 'onTab'])
+  try {
+    assert(page.tabDefs.value.some(tab => tab.key === 'config'))
+    page.onTab('config')
+    assert.deepEqual(page.events.at(-1), ['switch'])
+  } finally { page.dispose() }
+})
+
+test('source notifications initialize independently and persist with configuration', () => {
+  const config = component('Config', { api: {}, initialConfig: {
+    global: { notify: true }, providers: { douban: { notify: true }, netflix: { notify: false } },
+  } }, ['config', 'providerSpecs', 'ensureProviderConfig', 'saveConfig', 'notifyingCount', 'changedCount', 'snapshot', 'flatten'])
+  try {
+    const ids = ['douban', 'popular', 'mikan', 'netflix', 'maoyan']
+    config.providerSpecs.value = ids.map(provider_id => ({ provider_id, default_cron: '0 8 * * *' }))
+    config.providerSpecs.value.forEach(config.ensureProviderConfig)
+    config.snapshot.value = config.flatten(config.config)
+    assert.equal(config.config.global.notify, undefined)
+    assert.equal(config.config.providers.douban.notify, true)
+    assert.equal(config.config.providers.netflix.notify, false)
+    assert.equal(config.config.providers.mikan.notify, false)
+    assert.equal(config.notifyingCount.value, 1)
+    config.config.providers.mikan.notify = true
+    assert.equal(config.changedCount.value, 1)
+    assert.equal(config.notifyingCount.value, 2)
+    config.saveConfig()
+    const payload = config.events.find(event => event[0] === 'save')[1]
+    assert.equal(payload.providers.douban.notify, true)
+    assert.equal(payload.providers.netflix.notify, false)
+    assert.equal(payload.providers.mikan.notify, true)
+    assert.equal(payload.providers.maoyan.notify, false)
+    assert.equal(config.changedCount.value, 0)
+  } finally { config.dispose() }
+})
+
+test('music history can be supplemented with artists and entity type', () => {
+  const view = component('SupplementDialog', { api: {}, modelValue: true, target: {
+    unique: 'music:1', title: 'Song', type: '音乐', music_type: 'recording', artists: ['Artist'],
+  } }, ['resetForm', 'buildRequest', 'media', 'mediaFields', 'subscriptionFields'])
+  try {
+    view.resetForm()
+    const request = view.buildRequest()
+    assert.equal(request.media.type, '音乐')
+    assert.equal(request.media.music_type, 'recording')
+    assert.deepEqual(request.media.artists, ['Artist'])
+    assert(!view.subscriptionFields.value.some(field => field.key === 'resolution'))
+    assert(view.mediaFields.value.some(field => field.key === 'artistsText'))
+    view.media.artistsText = ''
+    assert.throws(() => view.buildRequest())
+  } finally { view.dispose() }
+})
+
+test('music blacklist sends structured artists and supports the music type', async () => {
+  const requests = []
+  const view = component('BlacklistDialog', { modelValue: true, target: {}, api: {
+    post: async (url, body) => { requests.push(body); return { code: 0 } },
+  } }, ['form', 'save', 'types'])
+  try {
+    Object.assign(view.form, { title: 'Song', type: '音乐', music_type: 'recording', artistsText: 'A, B' })
+    assert(view.types.value.some(option => option.value === '音乐'))
+    await view.save()
+    assert.deepEqual(requests[0].media.artists, ['A', 'B'])
+    assert.equal(requests[0].media.music_type, 'recording')
+  } finally { view.dispose() }
+})
+
+test('旧平铺来源配置不自动启用新默认规则，首次配置仍提供独立预设', () => {
+  const spec={provider_id:'anilist',default_cron:'15 8 * * *',options_schema:[{key:'rules',kind:'rule-list',default:[{name:'正在流行',sort:'TRENDING_DESC'}]},{key:'proxy',kind:'switch',default:false}],filters_schema:[]}
+  const config=component('Config',{initialConfig:{providers:{anilist:{options:{charts:[]},filters:{vote:8}}}}},['ensureProviderConfig','config'])
+  const fresh=component('Config',{initialConfig:{}},['ensureProviderConfig','config'])
+  try {
+    config.ensureProviderConfig(spec)
+    assert.deepEqual([...config.config.providers.anilist.options.rules],[])
+    fresh.ensureProviderConfig(spec)
+    assert.equal(fresh.config.providers.anilist.options.rules[0].name,'正在流行')
+    fresh.config.providers.anilist.options.rules[0].name='changed'
+    assert.equal(spec.options_schema[0].default[0].name,'正在流行')
+  } finally {config.dispose();fresh.dispose()}
+})
+
+test('插件页面打开不读取旧入口页签，也不跨窗口写入黑名单目标', () => {
+  const storage = { getItem: key => key === 'asa.pageView' ? 'blacklist' : null, setItem: () => { throw new Error('unexpected persistence') } }
+  const page = component('Page', { api: {}, show_switch: true }, ['view', 'onTab'], { localStorage: storage })
+  const config = component('Config', { initialConfig: {} }, ['onTab', 'navigationView'], { localStorage: storage })
+  try {
+    assert.equal(page.view.value, 'history')
+    page.onTab('config')
+    assert.ok(page.events.some(([name]) => name === 'switch'))
+    config.onTab('blacklist')
+    assert.equal(config.navigationView.value, 'blacklist')
+    assert.equal(config.events.some(([name]) => name === 'switch'), false)
+    const reopened = component('Config', { initialConfig: {} }, ['navigationView'], { localStorage: storage })
+    try { assert.equal(reopened.navigationView.value, '') } finally { reopened.dispose() }
+  } finally { page.dispose(); config.dispose() }
 })

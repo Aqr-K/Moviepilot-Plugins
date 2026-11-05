@@ -17,9 +17,10 @@ from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.media import resolve_media_identity
 
-from ..core.models import FieldSpec, ProviderSpec, RankMediaItem
-from ..core.provider import ProviderContext, RankProvider
+from ..schemas import FieldSpec, ProviderSpec, RankMediaItem
+from ..core.provider import ProviderContext
 from ..core.registry import register
+from ..core.rules import RuleRankProvider
 
 # category 展示标签（电影 / 剧集）。
 CATEGORY_LABELS = {"movie": "电影", "tv": "剧集"}
@@ -58,13 +59,13 @@ def _genre_options(genres: dict) -> List[dict]:
 
 
 @register
-class PopularRankProvider(RankProvider):
+class PopularRankProvider(RuleRankProvider):
     """热门媒体来源：将服务端统计项映射为标准化 ``RankMediaItem``。"""
 
     provider_id = "popular"
     provider_name = "热门媒体"
 
-    def get_spec(self) -> ProviderSpec:
+    def _source_spec(self) -> ProviderSpec:
         """返回本来源的元描述（选项 schema）。
 
         电影 / 剧集拆成两大组，各自独立配置「订阅开关 / 风格 / 获取条数 / 评分下限 /
@@ -98,14 +99,8 @@ class PopularRankProvider(RankProvider):
                    "本来源无法获取任何数据。请在下方『订阅数据共享』开关处开启（等同主程序设置，即时生效、无需重启）。",
         )
 
-    def has_listening(self, options: dict) -> bool:
-        """电影或剧集订阅任一开启，且主程序『订阅数据共享』已开（关闭则服务端无数据、等同无监听）。"""
-        options = options or {}
-        if not (self._enabled("movie", options) or self._enabled("tv", options)):
-            return False
-        return bool(settings.SUBSCRIBE_STATISTIC_SHARE)
 
-    def fetch(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
+    def _fetch_options(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
         """按类型开关拉取服务端统计并映射，逐条产出 ``RankMediaItem``。
 
         电影 / 剧集由 ``{category}_enabled`` 开关独立控制（缺省两类都开）；各自独立读取

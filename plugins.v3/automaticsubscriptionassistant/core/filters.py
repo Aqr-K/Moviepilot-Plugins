@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Type
 
 from app.schemas.types import MediaType
 
-from .models import FilterVerdict, RankMediaItem
+from ..schemas import FilterVerdict, RankMediaItem
 
 if TYPE_CHECKING:
     from app.sdk.media import MediaInfo
@@ -127,6 +127,25 @@ class FilterChain:
 
     def run(self, stage: str, item, mediainfo, config) -> FilterVerdict:
         """执行指定阶段的所有过滤器；任一拒绝立即返回该裁决。"""
+        global_verdict = self._run_stage(stage, item, mediainfo, config)
+        if not global_verdict.accepted:
+            return global_verdict
+        matches = (getattr(item, 'source_meta', None) or {}).get('matches')
+        if not matches:
+            return global_verdict
+        rejected = []
+        for match in matches:
+            filters = match.get('filters') or {}
+            # 同一条规则必须同时通过 pre/post，不能把两条规则各自通过的一半拼接。
+            verdict = self._run_stage('pre', item, mediainfo, filters)
+            if verdict.accepted and stage == 'post':
+                verdict = self._run_stage('post', item, mediainfo, filters)
+            if verdict.accepted:
+                return verdict
+            rejected.append(verdict)
+        return rejected[0] if rejected else global_verdict
+
+    def _run_stage(self, stage, item, mediainfo, config):
         for f in self._filters:
             if f.stage != stage:
                 continue

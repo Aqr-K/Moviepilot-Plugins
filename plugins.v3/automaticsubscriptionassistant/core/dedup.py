@@ -12,10 +12,10 @@ from urllib.parse import quote
 
 from app.schemas.types import MediaSource
 
-from .models import media_identity
+from ..schemas import media_identity
 
 if TYPE_CHECKING:
-    from .models import RankMediaItem
+    from ..schemas import RankMediaItem
 
 
 def _normalize_source(media_source):
@@ -115,7 +115,7 @@ class SubscribedIndex:
     def add_media(self, tmdbid: Optional[int] = None, doubanid: Optional[str] = None,
                   bangumiid: Optional[int] = None, mtype=None, season: Optional[int] = None,
                   title: str = "", year: Optional[str] = None, media_source=None,
-                  media_id=None, episode_group: Optional[str] = None) -> None:
+                  media_id=None, episode_group: Optional[str] = None, music_type=None) -> None:
         """登记一条媒体的全部强身份。
 
         前三个参数是旧调用点的兼容入口；新的宿主订阅行应传
@@ -142,6 +142,14 @@ class SubscribedIndex:
         if not normalized:
             return
 
+        if str(getattr(mtype, "value", mtype)) in {"音乐", "music"}:
+            if music_type not in {"recording", "album"}: return
+            primary_source, primary_id = normalized[0]
+            canonical = media_identity(media_source=primary_source, media_id=primary_id,
+                                       is_music=True, music_type=music_type, title=title, year=year)
+            for source, value in normalized:
+                self._keys.setdefault(f"music:{_source_prefix(source)}:{music_type}:{value}", canonical)
+            return
         is_tv = _is_tv(mtype)
         type_known = _has_type(mtype)
         primary_source, primary_id = normalized[0]
@@ -157,6 +165,11 @@ class SubscribedIndex:
 
     def _match_key(self, item: "RankMediaItem") -> Optional[str]:
         """返回条目命中的强标识键，未命中返回 None。"""
+        if str(getattr(item.type_hint, "value", item.type_hint)) in {"音乐", "music"}:
+            for source, identity in item.strong_identities():
+                key = f"music:{_source_prefix(source)}:{item.music_type}:{identity}"
+                if key in self._keys: return key
+            return None
         is_tv = _is_tv(item.type_hint)
         type_known = _has_type(item.type_hint)
         for source, media_id in item.strong_identities():
@@ -195,6 +208,7 @@ def build_subscribed_index(subscriptions: Iterable) -> SubscribedIndex:
                 media_source=source,
                 media_id=media_id,
                 mtype=getattr(sub, "type", None),
+                music_type=getattr(sub, "music_type", None),
                 season=getattr(sub, "season", None),
                 episode_group=getattr(sub, "episode_group", None),
                 title=getattr(sub, "name", "") or getattr(sub, "title", ""),

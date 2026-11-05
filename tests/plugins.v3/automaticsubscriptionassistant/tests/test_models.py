@@ -1,7 +1,7 @@
-"""core/models.py 单元测试：数据对象序列化、去重键、裁决工厂。"""
+"""schemas 单元测试：数据对象序列化、去重键、裁决工厂。"""
 from __future__ import annotations
 
-from app.plugins.automaticsubscriptionassistant.core.models import (
+from app.plugins.automaticsubscriptionassistant.schemas import (
     FieldSpec,
     FilterVerdict,
     HistoryRecord,
@@ -122,8 +122,6 @@ def test_field_spec_to_dict():
         "options": [{"title": "全部", "value": "all"}],
         "hint": "提示",
         "advanced": False,
-        "columns": None,
-        "row_noun": None,
     }
 
 

@@ -1,18 +1,8 @@
-"""插件自有表定义。
+"""订阅展示历史与独立成功账本。"""
 
-表建在插件独立的库与 ``MetaData`` 上，与宿主表互不干扰；宿主在插件启动时按
-``get_database_models()`` 建表，存储层另有幂等兜底，故不依赖宿主的建表时机。
+from sqlalchemy import JSON, Column, Index, Integer, String, Text
 
-``time`` 用 ``"%Y-%m-%d %H:%M:%S"`` 文本存放：该格式字典序即时间序，可直接参与
-SQL 排序与范围比较，也与前端既有展示同形，无需换算。
-"""
-from __future__ import annotations
-
-from sqlalchemy import Column, Index, Integer, JSON, String, Text
-
-from app.sdk.database import plugin_declarative_base
-
-Base = plugin_declarative_base()
+from .base import Base
 
 
 class SubscribeHistory(Base):
@@ -42,6 +32,9 @@ class SubscribeHistory(Base):
     episode_group = Column(String(128))
     poster = Column(Text)
     season = Column(Integer)
+    music_type = Column(String(32))
+    artists = Column(JSON)
+    album = Column(Text)
     candidate_key = Column(String(80))
     source_item = Column(JSON)
     # SubscribeStatus.value。
@@ -59,6 +52,9 @@ class SubscribeHistory(Base):
         """序列化为前端所需的 dict（不含自增主键）。"""
         return {
             "unique": self.unique,
+            "music_type": self.music_type,
+            "artists": self.artists or [],
+            "album": self.album,
             "provider": self.provider,
             "title": self.title,
             "year": self.year,
@@ -87,7 +83,3 @@ class SubscribeHandled(Base):
     key = Column(String(255), primary_key=True)
     canonical = Column(String(255), nullable=False, index=True)
     provider = Column(String(64), nullable=False, default="")
-
-
-# 供 get_database_models() 声明与存储层取用。
-MODELS = [SubscribeHistory, SubscribeHandled]

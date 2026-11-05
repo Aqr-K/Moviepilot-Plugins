@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import federation from '@originjs/vite-plugin-federation'
+
+const pluginSource = readFileSync(new URL('../__init__.py', import.meta.url), 'utf8')
+const pluginVersion = pluginSource.match(/plugin_version\s*=\s*['"]([^'"]+)['"]/)?.[1]
+if (!pluginVersion) throw new Error('无法读取插件版本')
 
 // 仅在构建联邦产物时剥离 Vuetify 的 .v-* / .mdi-* 规则（宿主提供 Vuetify，避免重复打包）。
 // dev serve 无宿主，需要完整 Vuetify 样式，否则开关/输入框等结构样式缺失。
@@ -18,6 +23,7 @@ const vuetifyFilter = {
 }
 
 export default defineConfig(({ command }) => ({
+  define: { __ASA_PLUGIN_VERSION__: JSON.stringify(pluginVersion) },
   plugins: [
     vue(),
     federation({
@@ -26,7 +32,6 @@ export default defineConfig(({ command }) => ({
       exposes: {
         './Page': './src/components/Page.vue',
         './AppPage': './src/components/AppPage.vue',
-        './AppPageBlacklist': './src/components/AppPageBlacklist.vue',
         './Config': './src/components/Config.vue',
         './Dashboard': './src/components/Dashboard.vue',
       },
@@ -53,6 +58,10 @@ export default defineConfig(({ command }) => ({
     target: 'esnext',   // 必须设置为esnext以支持顶层await
     minify: false,      // 开发阶段建议关闭混淆
     cssCodeSplit: true, // 改为true以便能分离样式文件
+    // 联邦组件由宿主加载，来源图标内嵌，避免生成指向宿主 /assets/ 的地址。
+    assetsInlineLimit(filePath) {
+      if (filePath.replaceAll('\\', '/').includes('/src/assets/providers/')) return true
+    },
   },
   css: {
     preprocessorOptions: {

@@ -1,10 +1,13 @@
 """来源注册表：模块级单例 + ``@register`` 装饰器。"""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Dict, List, Optional, Type, TypeVar
 
 if TYPE_CHECKING:
     from .provider import RankProvider
+
+
+_Provider = TypeVar("_Provider", bound="RankProvider")
 
 
 class ProviderRegistry:
@@ -13,7 +16,7 @@ class ProviderRegistry:
     def __init__(self):
         self._providers: Dict[str, Type["RankProvider"]] = {}
 
-    def register(self, cls: Type["RankProvider"]) -> Type["RankProvider"]:
+    def register(self, cls: Type[_Provider]) -> Type[_Provider]:
         """注册来源类（以 cls.provider_id 为键）。"""
         self._providers[cls.provider_id] = cls
         return cls
@@ -36,6 +39,6 @@ class ProviderRegistry:
 registry = ProviderRegistry()
 
 
-def register(cls: Type["RankProvider"]) -> Type["RankProvider"]:
+def register(cls: Type[_Provider]) -> Type[_Provider]:
     """装饰器：把来源类注册到模块级 registry。"""
     return registry.register(cls)

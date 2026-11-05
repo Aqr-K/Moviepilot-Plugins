@@ -7,21 +7,22 @@ import pytest
 
 from app.schemas.types import MediaType
 from app.plugins.automaticsubscriptionassistant import AutomaticSubscriptionAssistant
-from app.plugins.automaticsubscriptionassistant.core.blacklist import BlacklistApiMixin, BlacklistStore
+from app.plugins.automaticsubscriptionassistant.api.blacklist import BlacklistApiMixin
+from app.plugins.automaticsubscriptionassistant.services.blacklist import BlacklistStore
 from app.plugins.automaticsubscriptionassistant.core.filters import FilterChain
-from app.plugins.automaticsubscriptionassistant.core.models import RankMediaItem, SubscribeStatus
+from app.plugins.automaticsubscriptionassistant.schemas import RankMediaItem, SubscribeStatus
 from test_executor import _exec, _make_ctx, _make_store, _mediainfo, _PROVIDER
 
 
 @pytest.fixture
 def backing():
-    data = {}
-    return data
+    history, _ = _make_store()
+    yield {"session_factory": history._session_factory}
+    history._session_factory.kw["bind"].dispose()
 
 
 def store_for(backing):
-    return BlacklistStore(lambda key: deepcopy(backing.get(key)),
-                          lambda key, value: backing.__setitem__(key, deepcopy(value)))
+    return BlacklistStore(backing["session_factory"])
 
 
 def tv(**kwargs):
@@ -96,6 +97,7 @@ def test_stale_store_cannot_erase_rules_and_repeated_add_is_idempotent(backing):
 
 def ready_context(backing, season=2):
     ctx = _make_ctx()
+    ctx.blacklist = store_for(backing)
     ctx.get_data = lambda key: deepcopy(backing.get(key))
     ctx.save_data = lambda key, value: backing.__setitem__(key, deepcopy(value))
     ctx.chain.recognize_media.return_value = _mediainfo(mtype=MediaType.TV, season=season)
@@ -150,10 +152,14 @@ class Api(BlacklistApiMixin):
     def __init__(self, backing):
         self.get_data = lambda key: deepcopy(backing.get(key))
         self.save_data = lambda key, value: backing.__setitem__(key, deepcopy(value))
+        self.rules = store_for(backing)
         self.manager = MagicMock()
         self.manager.list_mine.return_value = [{"id": 1, "name": "测试剧", "type": "电视剧", "tmdbid": "42", "season": 2}]
         self.manager.delete.return_value = {"ok": 1, "failed": 0, "ok_ids": [1], "failed_ids": []}
         self.history = MagicMock()
+
+    def blacklist_store(self):
+        return self.rules
 
     def blacklist_subscribe_manager(self):
         return self.manager
@@ -187,7 +193,7 @@ def test_unsubscribe_only_after_rule_is_saved(backing):
 
 def test_failed_persistence_does_not_unsubscribe(backing):
     api = Api(backing)
-    api.save_data = lambda *_: False
+    api.rules.add = MagicMock(side_effect=RuntimeError("黑名单保存失败"))
     result = api.api_subscribes_block({"ids": [1]})
     assert result["failed_ids"] == [1]
     assert "黑名单保存失败" in result["message"]
@@ -217,7 +223,8 @@ def test_blacklist_routes_require_bearer_auth_and_sidebar_declares_entry():
     endpoints = [route for route in plugin.get_api() if "blacklist" in route["path"] or route["path"] == "/subscribes/block"]
     assert len(endpoints) == 4
     assert all(route["auth"] == "bear" for route in endpoints)
-    assert plugin.get_sidebar_nav()[0]["nav_key"] == "blacklist"
+    assert plugin.get_sidebar_nav()[0]["nav_key"] == "main"
+    assert plugin.get_sidebar_nav()[0]["permission"] == "admin"
 
 
 def test_manual_douban_all_seasons_resolves_canonical_show_before_saving(backing):

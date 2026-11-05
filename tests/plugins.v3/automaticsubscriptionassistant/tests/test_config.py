@@ -9,7 +9,7 @@ from app.plugins.automaticsubscriptionassistant.core.config import (
     TypedConfigAccess,
     build_defaults,
 )
-from app.plugins.automaticsubscriptionassistant.core.models import FieldSpec, ProviderSpec
+from app.plugins.automaticsubscriptionassistant.schemas import FieldSpec, ProviderSpec
 from app.plugins.automaticsubscriptionassistant.core.registry import registry
 
 
@@ -77,18 +77,16 @@ def test_global_config_defaults():
     assert g.enabled is False
     assert g.username == DEFAULT_USERNAME
     assert g.exist_ok is True
-    assert g.notify is False
     assert g.onlyonce is False
     assert g.clear is False
 
 
 def test_global_config_overrides():
     g = GlobalConfig({"enabled": True, "username": "自定义", "exist_ok": False,
-                      "notify": True, "onlyonce": True, "clear": True})
+                      "onlyonce": True, "clear": True})
     assert g.enabled is True
     assert g.username == "自定义"
     assert g.exist_ok is False
-    assert g.notify is True
     assert g.onlyonce is True
     assert g.clear is True
 
@@ -172,7 +170,6 @@ def test_build_defaults_global_keys():
         "enabled": False,
         "username": DEFAULT_USERNAME,
         "exist_ok": True,
-        "notify": False,
         "history_keep": 0,
         "onlyonce": False,
         "clear": False,
@@ -188,6 +185,7 @@ def test_build_defaults_covers_all_providers():
     for spec in specs:
         block = prov[spec.provider_id]
         assert block["enabled"] is False
+        assert block["notify"] is False
         assert block["cron"] == spec.default_cron
         # options/filters 键与各自 schema 完全对应，值为字段默认
         assert set(block["options"].keys()) == {f.key for f in spec.options_schema}

@@ -20,6 +20,8 @@ from app.sdk.queries import (
     SubscriptionSnapshot,
 )
 
+from ..schemas import _normalize_media_identity, media_identity
+
 # 允许的订阅状态：R=订阅中/恢复，P=待定，S=暂停（与主程序 subscribe 状态一致）。
 VALID_STATES = ("R", "P", "S")
 
@@ -30,7 +32,7 @@ PLUGIN_USERNAME = "自动订阅助手"
 # 单独的 media_id 不足以定位媒体，两者必须成对取用。
 _FIELDS = ("id", "name", "year", "type", "media_source", "media_id", "season",
            "episode_group", "poster", "state", "total_episode", "lack_episode", "date",
-           "last_update")
+           "last_update", "music_type")
 
 
 def list_subscriptions(username: Optional[str] = None, *, queries=subscription_queries) -> List[SubscriptionSnapshot]:
@@ -61,7 +63,8 @@ class SubscribeManager:
     """本插件订阅的手动管理器。"""
 
     def __init__(self, oper, username: str = PLUGIN_USERNAME,
-                 on_deleted: Optional[Callable] = None, *, queries=subscription_queries):
+                 on_deleted: Optional[Callable] = None, *, queries=subscription_queries,
+                 source_lookup: Optional[Callable[[List[str]], Dict[str, str]]] = None):
         """
         绑定订阅写入端口与官方查询 SDK，所有写操作均先复核快照中的归属。
 
@@ -69,11 +72,13 @@ class SubscribeManager:
         :param username: 本插件创建订阅时使用的用户名
         :param on_deleted: 删除成功后的事件通知回调
         :param queries: 宿主查询 SDK；测试可注入隔离实现
+        :param source_lookup: 按精确媒体身份批量查询首次命中的榜单来源
         """
         self.oper = oper                # SubscribeOper（注入，便于测试）
         self.queries = queries
         self.username = username
         self.on_deleted = on_deleted    # on_deleted(sid, sub)：删除成功后回调（插件侧发事件）
+        self.source_lookup = source_lookup
 
     def list_mine(self) -> List[dict]:
         """
@@ -82,7 +87,26 @@ class SubscribeManager:
         :return: 按配置用户名精确筛选的全部订阅
         """
         subs = list_subscriptions(self.username, queries=self.queries)
-        return [self._to_dict(s) for s in subs]
+        rows = [self._to_dict(sub) for sub in subs]
+        keys = [self._source_key(row) for row in rows]
+        targets = list(dict.fromkeys(key for key in keys if key))
+        providers = self.source_lookup(targets) if self.source_lookup and targets else {}
+        for row, key in zip(rows, keys):
+            row["provider"] = providers.get(key) if key else None
+        return rows
+
+    @staticmethod
+    def _source_key(row: dict) -> Optional[str]:
+        """仅按强身份、类型、季号及剧集组匹配来源，禁止用同名作品猜测。"""
+        source, media_id = _normalize_media_identity(row.get("media_source"), row.get("media_id"))
+        if not source or not media_id or row.get("type") not in ("电影", "电视剧", "音乐"):
+            return None
+        is_tv = row["type"] == "电视剧"
+        if is_tv and row.get("season") is None:
+            return None
+        return media_identity(media_source=source, media_id=media_id, is_tv=is_tv,
+                              season=row.get("season"), episode_group=row.get("episode_group"),
+                              is_music=row["type"] == "音乐", music_type=row.get("music_type"))
 
     def _owned(self, sid):
         """

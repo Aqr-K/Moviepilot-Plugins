@@ -11,12 +11,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.plugins.automaticsubscriptionassistant import AutomaticSubscriptionAssistant as Plugin
-from app.plugins.automaticsubscriptionassistant.core.models import ProviderSpec
+from app.plugins.automaticsubscriptionassistant.schemas import ProviderSpec
 
 
 def _bare_plugin(providers, enabled=True):
     """构造未初始化的裸插件实例并注入 get_service 所需的最小依赖。"""
     plugin = Plugin.__new__(Plugin)
+    plugin._database_ready = True
     plugin._providers = providers
     plugin._settings = SimpleNamespace(
         global_config=SimpleNamespace(enabled=enabled),

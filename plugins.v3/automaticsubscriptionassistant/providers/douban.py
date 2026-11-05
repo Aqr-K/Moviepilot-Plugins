@@ -18,9 +18,10 @@ from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
 from app.sdk.utilities import DomUtils
 
-from ..core.models import FieldSpec, ProviderSpec, RankMediaItem
-from ..core.provider import ProviderContext, RankProvider
+from ..schemas import FieldSpec, ProviderSpec, RankMediaItem
+from ..core.provider import ProviderContext
 from ..core.registry import register
+from ..core.rules import RuleRankProvider
 
 # 默认 RSSHub 基址；部分地区 rsshub.app 被 SNI 黑名单封锁，可在配置里改为自建实例。
 DEFAULT_RSSHUB_BASE = "https://rsshub.app"
@@ -62,13 +63,13 @@ _DOUBAN_ID_PATTERN = re.compile(r"/(\d+)/")
 
 
 @register
-class DoubanRankProvider(RankProvider):
+class DoubanRankProvider(RuleRankProvider):
     """豆瓣榜单来源：解析 RSS item 为标准化 ``RankMediaItem``。"""
 
     provider_id = "douban"
     provider_name = "豆瓣榜单"
 
-    def get_spec(self) -> ProviderSpec:
+    def _source_spec(self) -> ProviderSpec:
         """返回本来源的元描述（选项与过滤器 schema）。"""
         rank_options = [
             {"title": DOUBAN_RANK_LABELS[key], "value": key}
@@ -127,14 +128,8 @@ class DoubanRankProvider(RankProvider):
             ],
         )
 
-    def has_listening(self, options: dict) -> bool:
-        """选了任一内置榜单，或填了任一自定义 RSS 地址。"""
-        options = options or {}
-        ranks = [r for r in self._as_list(options.get("ranks")) if r in DOUBAN_ADDRESS]
-        custom = [ln for ln in str(options.get("rss_addrs") or "").splitlines() if ln.strip()]
-        return bool(ranks) or bool(custom)
 
-    def fetch(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
+    def _fetch_options(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
         """抓取并解析豆瓣 RSS，逐条产出 ``RankMediaItem``。
 
         单条 item 解析失败内部 try/except continue；请求/解析级异常向上抛出，由 runner 捕获。

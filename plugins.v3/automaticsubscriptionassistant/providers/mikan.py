@@ -40,9 +40,10 @@ from app.sdk.config import settings
 from app.sdk.logging import logger
 from app.sdk.network import RequestUtils
 
-from ..core.models import FieldSpec, ProviderSpec, RankMediaItem
-from ..core.provider import ProviderContext, RankProvider
+from ..schemas import FieldSpec, ProviderSpec, RankMediaItem
+from ..core.provider import ProviderContext
 from ..core.registry import register
+from ..core.rules import RuleRankProvider
 
 # 蜜柑计划基址（主 + 备），逐个尝试。
 MIKAN_URLS = ["https://mikanani.me", "https://mikanime.tv"]
@@ -253,7 +254,7 @@ class MikanApi:
 
 
 @register
-class MikanRankProvider(RankProvider):
+class MikanRankProvider(RuleRankProvider):
     """Mikan 季度新番来源：解析蜜柑季度番剧列表为标准化 ``RankMediaItem``。
 
     ``resolve_bangumi_id`` 为 True 时逐条抓详情，一次请求拿齐 bgm subject id +
@@ -267,7 +268,7 @@ class MikanRankProvider(RankProvider):
     provider_id = "mikan"
     provider_name = "Mikan 季度新番"
 
-    def get_spec(self) -> ProviderSpec:
+    def _source_spec(self) -> ProviderSpec:
         """返回本来源的元描述（选项与过滤器 schema）。"""
         season_options = [{"title": "当前季度（自动）", "value": SEASON_AUTO}] + [
             {"title": f"{s}季", "value": s} for s in MIKAN_SEASONS
@@ -299,7 +300,7 @@ class MikanRankProvider(RankProvider):
             ],
         )
 
-    def fetch(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
+    def _fetch_options(self, options: dict, context: ProviderContext) -> Iterator[RankMediaItem]:
         """
         抓取蜜柑季度番剧列表，逐条产出 ``RankMediaItem``。
 
