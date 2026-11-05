@@ -185,7 +185,7 @@ def test_douban_custom_address_fields_are_advanced():
     assert {f.key for f in spec.options_schema if f.advanced} == {"rsshub_base"}
     fields = {f.key:f for f in spec.options_schema[0].fields}
     assert fields['url'].visible_when == {'chart':['custom']}
-    assert fields['vote'].maximum == 10
+    assert fields['vote'].maximum is None
 
 
 def test_maoyan_cookie_branch(monkeypatch):
@@ -380,7 +380,7 @@ def test_popular_spec_has_genre_and_rating_fields():
     assert fields['genres'].options_by['key'] == 'category'
     assert {o['value'] for o in fields['genres'].options_by['values']['movie']} == {str(g) for g in MOVIE_GENRES}
     assert {o['value'] for o in fields['genres'].options_by['values']['tv']} == {str(g) for g in TV_GENRES}
-    assert fields['min_rating'].maximum == 10 and fields['limit'].minimum == 1
+    assert fields['min_rating'].maximum is None and fields['limit'].minimum == 0
     assert spec.filters_schema == []
 
 
@@ -543,7 +543,7 @@ def test_netflix_spec_shape():
     assert len(fields['country'].options)==94
     assert len(fields['categories'].options_by['values']['weekly'])==4
     assert len(fields['categories'].options_by['values']['country'])==2
-    assert fields['limit'].maximum==10
+    assert fields['limit'].maximum is None
     assert opts['rich_metadata'].default is False and opts['max_workers'].default==5
     assert opts['use_cache'].default is True
     assert spec.filters_schema==[]

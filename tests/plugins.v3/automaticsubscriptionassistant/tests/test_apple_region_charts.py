@@ -91,8 +91,8 @@ def test_empty_or_disabled_rules_do_not_listen_or_fetch(monkeypatch, entries):
         [{"country": "xx"}],
         [{"chart": "invalid"}],
         [{"on": "false"}],
-        [{"limit": 0}],
-        [{"limit": 101}],
+        [{"limit": -1}],
+        [{"limit": 1.5}],
         [{"chart": None}],
     ],
 )

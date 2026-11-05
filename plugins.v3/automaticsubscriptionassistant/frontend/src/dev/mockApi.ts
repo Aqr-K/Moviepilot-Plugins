@@ -275,7 +275,16 @@ function localizeSpec(spec: ProviderSpec, lang: string): ProviderSpec {
   }
 }
 
-export function createMockApi(): MockApi {
+export function createMockApi(initialConfig: Record<string, any> = {}): MockApi {
+  const defaults = () => ({ global: { enabled: false, username: '自动订阅助手', exist_ok: true, history_keep: 0, onlyonce: false, clear: false },
+    providers: Object.fromEntries(PROVIDER_SPECS.map(s => [s.provider_id, { enabled: false, notify: false, cron: s.default_cron,
+      options: Object.fromEntries(s.options_schema.map(f => [f.key, JSON.parse(JSON.stringify(f.default))])), filters: {} }])) })
+  let config = defaults()
+  config.global = { ...config.global, ...initialConfig.global }
+  for (const [pid, raw] of Object.entries(initialConfig.providers || {})) {
+    const source = raw as Record<string, any>
+    config.providers[pid] = { ...config.providers[pid], ...source, options: { ...config.providers[pid]?.options, ...source.options } }
+  }
   let blacklist: Record<string, any>[] = []
   return {
     get(url: string): Promise<unknown> {
@@ -330,11 +339,20 @@ export function createMockApi(): MockApi {
         return delay({ list: SUBSCRIBES.slice(), total: SUBSCRIBES.length })
       }
       if (path.endsWith('/config')) {
-        return delay({ config: {} })
+        return delay({ code: 0, config: JSON.parse(JSON.stringify(config)) })
       }
       return delay({})
     },
     post(url: string, body?: Record<string, any>): Promise<unknown> {
+      if (url.endsWith('/config/reset')) {
+        if (body?.confirmed !== true) return delay({ code: 1, message: '请先确认还原配置' })
+        config = defaults()
+        return delay({ code: 0, config: JSON.parse(JSON.stringify(config)) })
+      }
+      if (url.endsWith('/config')) {
+        config = JSON.parse(JSON.stringify(body))
+        return delay({ code: 0 })
+      }
       // 仅开发壳的内存演示，生产识别与防重复行为由后端管线负责。
       if (url.endsWith('/history/supplement')) {
         const original = HISTORY.find(row => row.unique === body?.unique)

@@ -2,7 +2,7 @@
 
 统一聚合 **豆瓣、猫眼、热门媒体、Mikan、奈飞、AniList、Spotify、苹果音乐、网易云音乐、腾讯音乐** 十类来源，按你的规则组合过滤后**自动订阅**的 MoviePilot 插件。每个来源可单独开关、单独定时、单独手动运行，所有来源共用一套「识别 → 查重 → 订阅 → 记历史」落地管线，按媒体身份、季号和成功历史防止重复订阅。
 
-本插件后续仅维护、测试和发布 **MoviePilot v3** 版本；v2 保留历史版本。当前插件版本为 **3.4.1**。发布文案见[3.4.1 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.1.md)。原生管理菜单需要主程序前端同步提供对应宿主入口。
+本插件后续仅维护、测试和发布 **MoviePilot v3** 版本；v2 保留历史版本。当前插件版本为 **3.4.2**。发布文案见[3.4.2 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.2.md)。原生管理菜单需要主程序前端同步提供对应宿主入口。
 
 ---
 
@@ -357,4 +357,10 @@
 - 黑名单说明：[`../../docs/automatic-subscription-assistant-blacklist.md`](../../docs/automatic-subscription-assistant-blacklist.md)
 - 历史审查修复记录：[`../../docs/automatic-subscription-assistant-fixes-2026-10-24.md`](../../docs/automatic-subscription-assistant-fixes-2026-10-24.md)
 
-版本更新说明见[3.4.1 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.1.md)。
+版本更新说明见[3.4.2 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.2.md)。
+
+## 配置异常恢复（3.4.2 起）
+
+在「订阅配置 → 全局设置 → 一次性维护」中点击「还原全部默认配置」，确认后备份当前设置并立即恢复默认值。插件和所有来源会关闭，历史、黑名单及已有订阅保留。也可以只还原异常来源，编辑完成后保存，避免重新配置其他来源。即使旧配置升级失败或配置读取暂时不可用，来源导航和全局维护入口仍然显示。
+
+规则数值取消固定上限，获取数量为 0 表示暂停该规则；接口容量由请求层处理。单个来源配置异常只暂停该来源，原值保留，其他来源可以继续运行和保存。

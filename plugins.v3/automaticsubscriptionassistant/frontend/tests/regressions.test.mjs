@@ -915,13 +915,14 @@ test('music blacklist sends structured artists and supports the music type', asy
 
 test('旧平铺来源配置不自动启用新默认规则，首次配置仍提供独立预设', () => {
   const spec={provider_id:'anilist',default_cron:'15 8 * * *',options_schema:[{key:'rules',kind:'rule-list',default:[{name:'正在流行',sort:'TRENDING_DESC'}]},{key:'proxy',kind:'switch',default:false}],filters_schema:[]}
-  const config=component('Config',{initialConfig:{providers:{anilist:{options:{charts:[]},filters:{vote:8}}}}},['ensureProviderConfig','config'])
-  const fresh=component('Config',{initialConfig:{}},['ensureProviderConfig','config'])
+  const config=component('Config',{initialConfig:{providers:{anilist:{options:{charts:[]},filters:{vote:8}}}}},['ensureProviderConfig','config','preservedProviders','providerIssues'])
+  const fresh=component('Config',{initialConfig:{}},['ensureProviderConfig','config','preservedProviders','providerIssues'])
   try {
-    assert.throws(() => config.ensureProviderConfig(spec), /尚未完成自动迁移/)
-    assert.deepEqual([...config.config.providers.anilist.options.charts], [])
-    assert.equal(config.config.providers.anilist.filters.vote, 8)
-    assert.equal(config.config.providers.anilist.options.rules, undefined)
+    config.ensureProviderConfig(spec)
+    assert.deepEqual([...config.preservedProviders.anilist.options.charts], [])
+    assert.equal(config.preservedProviders.anilist.filters.vote, 8)
+    assert.ok(config.providerIssues.anilist)
+    assert.equal(config.config.providers.anilist.enabled, false)
     fresh.ensureProviderConfig(spec)
     assert.equal(fresh.config.providers.anilist.options.rules[0].name,'正在流行')
     fresh.config.providers.anilist.options.rules[0].name='changed'
@@ -969,7 +970,7 @@ test('配置页优先读取后端迁移结果，语言刷新不覆盖未保存�
   } finally { config.dispose() }
 })
 
-for (const outcome of ['failed', 'unavailable', 'legacy']) test(`配置升级 ${outcome} 时保留旧字段并禁止保存`, async () => {
+for (const outcome of ['failed', 'unavailable', 'legacy']) test(`配置升级 ${outcome} 时保留旧字段且来源仍可渲染`, async () => {
   const old = { providers: { douban: { options: { ranks: ['tv-hot'] }, filters: { vote: 8 } } } }
   const config = component('Config', { initialConfig: old, api: { get: async url => {
     if (url.endsWith('/config')) {
@@ -977,15 +978,17 @@ for (const outcome of ['failed', 'unavailable', 'legacy']) test(`配置升级 ${
       return outcome === 'failed' ? { code: 1, message: '备份失败', config: old } : { code: 0, config: old }
     }
     return { providers: [{ provider_id: 'douban', options_schema: [{ key: 'rules', kind: 'rule-list', default: [] }], filters_schema: [] }] }
-  } } }, ['loadProviders', 'config', 'saveConfig', 'configurationBlocked', 'error'])
+  } } }, ['loadProviders', 'config', 'saveConfig', 'configurationBlocked', 'error', 'providerSpecs', 'providerIssues', 'preservedProviders'])
   try {
     await config.loadProviders()
-    assert.equal(config.configurationBlocked.value, true)
-    assert(config.error.value)
-    assert.deepEqual([...config.config.providers.douban.options.ranks], ['tv-hot'])
-    assert.equal(config.config.providers.douban.filters.vote, 8)
+    assert.equal(config.configurationBlocked.value, outcome === 'unavailable')
+    assert.equal(config.providerSpecs.value.length, 1)
+    assert.ok(config.providerIssues.douban)
+    assert.deepEqual([...config.preservedProviders.douban.options.ranks], ['tv-hot'])
+    assert.equal(config.preservedProviders.douban.filters.vote, 8)
     config.saveConfig()
-    assert.equal(config.events.filter(event => event[0] === 'save').length, 0)
+    if (outcome === 'unavailable') assert.equal(config.events.filter(event => event[0] === 'save').length, 0)
+    else assert.deepEqual(config.events.find(event => event[0] === 'save')[1].providers.douban, old.providers.douban)
   } finally { config.dispose() }
 })
 
@@ -1009,4 +1012,73 @@ test('来源标签刷新失败后重试也不覆盖已加载的配置草稿', as
     assert.equal(configReads, 1)
     assert.equal(config.config.providers.douban.options.rules[0].id, 'draft')
   } finally { config.dispose() }
+})
+
+test('来源配置读取失败仍展示全部来源，维护按钮可独立还原', async () => {
+  const specs = JSON.parse(fs.readFileSync(new URL('../src/dev/providerSpecs.json', import.meta.url), 'utf8'))
+  const defaults = { global: { enabled: false, onlyonce: false, clear: false }, providers: Object.fromEntries(specs.map(s => [s.provider_id, {
+    enabled: false, notify: false, cron: s.default_cron,
+    options: Object.fromEntries(s.options_schema.map(f => [f.key, f.default])), filters: {},
+  }])) }
+  const posts = []
+  const view = component('Config', { initialConfig: { providers: { netflix: { options: { limit: 50 } } } }, api: {
+    get: async url => { if (url.includes('/providers')) return { providers: specs }; throw new Error('config unavailable') },
+    post: async (url, body) => { posts.push([url, body]); return { code: 0, config: defaults } },
+  } }, ['loadProviders', 'providerSpecs', 'groups', 'configurationBlocked', 'resetTarget', 'restoreDefaults', 'config', 'providerIssues', 'preservedProviders', 'changedCount'])
+  try {
+    await view.loadProviders()
+    assert.equal(view.providerSpecs.value.length, 10)
+    assert.equal(view.groups.value.filter(g => !g.heading).length, 11)
+    assert.equal(view.configurationBlocked.value, true)
+    view.resetTarget.value = 'all'
+    await view.restoreDefaults()
+    assert.deepEqual(posts, [['plugin/AutomaticSubscriptionAssistant/config/reset', { confirmed: true }]])
+    assert.equal(view.configurationBlocked.value, false)
+    assert.equal(view.config.global.enabled, false)
+    assert.equal(Object.keys(view.config.providers).length, 10)
+    assert.equal(Object.keys(view.providerIssues).length, 0)
+    assert.equal(Object.keys(view.preservedProviders).length, 0)
+    assert.equal(view.changedCount.value, 0)
+    assert.equal(view.resetTarget.value, '')
+  } finally { view.dispose() }
+})
+
+test('单来源异常保留原件，其他来源可编辑保存；单独还原只修改该来源草稿', async () => {
+  const bad = { enabled: true, options: { rules: [{ chart: 'unknown', limit: 50 }] } }
+  const valid = { enabled: true, cron: '0 8 * * *', options: { rules: [] }, filters: {} }
+  const specs = ['netflix', 'douban'].map(provider_id => ({ provider_id, default_cron: '0 8 * * *', options_schema: [{ key: 'rules', kind: 'rule-list', default: [{ name: 'Default', limit: 10 }] }], filters_schema: [] }))
+  const view = component('Config', { initialConfig: {}, api: { get: async url => url.includes('/providers') ? { providers: specs } : { code: 0, config: { providers: { netflix: bad, douban: valid } }, provider_errors: { netflix: 'unknown chart' } } } },
+    ['loadProviders', 'config', 'providerSpecs', 'providerIssues', 'saveConfig', 'resetTarget', 'restoreDefaults', 'changedCount'])
+  try {
+    await view.loadProviders()
+    assert.equal(view.providerSpecs.value.length, 2)
+    assert.equal(view.providerIssues.netflix, 'unknown chart')
+    view.config.providers.douban.cron = '0 9 * * *'
+    view.saveConfig()
+    let payload = view.events.filter(event => event[0] === 'save').at(-1)[1]
+    assert.deepEqual(payload.providers.netflix, bad)
+    assert.equal(payload.providers.douban.cron, '0 9 * * *')
+    view.resetTarget.value = 'netflix'
+    await view.restoreDefaults()
+    assert.equal(view.providerIssues.netflix, undefined)
+    assert.equal(view.config.providers.netflix.enabled, false)
+    assert.equal(view.config.providers.douban.cron, '0 9 * * *')
+    assert(view.changedCount.value > 0)
+    view.saveConfig()
+    payload = view.events.filter(event => event[0] === 'save').at(-1)[1]
+    assert.equal(payload.providers.netflix.options.rules[0].name, 'Default')
+  } finally { view.dispose() }
+})
+
+test('恢复失败时保留当前配置和草稿，确认弹窗保持打开', async () => {
+  const view = component('Config', { initialConfig: { global: { username: 'Keep user' } }, api: { post: async () => ({ code: 1, message: 'disk full' }) } },
+    ['resetTarget', 'restoreDefaults', 'config', 'resetError', 'resetBusy'])
+  try {
+    view.resetTarget.value = 'all'
+    await view.restoreDefaults()
+    assert.equal(view.config.global.username, 'Keep user')
+    assert.equal(view.resetTarget.value, 'all')
+    assert.equal(view.resetError.value, 'disk full')
+    assert.equal(view.resetBusy.value, false)
+  } finally { view.dispose() }
 })

@@ -8,6 +8,14 @@ class RoutesApiMixin:
         """注册插件 API 端点（读取类走 bear，删除类可用 apikey）。"""
         return [
             {
+                "path": "/config/reset",
+                "endpoint": self.api_reset_config,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "还原全部默认配置",
+                "description": "确认并备份后还原配置，关闭全部来源，保留历史与黑名单",
+            },
+            {
                 "path": "/history/supplement",
                 "endpoint": self.api_history_supplement,
                 "methods": ["POST"],

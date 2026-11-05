@@ -28,7 +28,7 @@ test('季度切换仅保存有效条件，固定年份保留全年选择', () =>
   assert.notEqual(ruleSignature(fields('anilist'), {time:'fixed',year:2025}), ruleSignature(fields('anilist'), {time:'fixed',year:2024}))
 })
 test('字段校验拒绝非法数字、空形式及无效 RSS，允许可选筛选为空', () => {
-  for (const limit of [0,501,1.5,'NaN','Infinity','']) assert.ok(invalidFields(fields('anilist'), {limit}).some(f => f.key === 'limit'))
+  for (const limit of [-1,1.5,'NaN','Infinity','']) assert.ok(invalidFields(fields('anilist'), {limit}).some(f => f.key === 'limit'))
   assert.ok(invalidFields(fields('anilist'), {formats:[]}).some(f => f.key === 'formats'))
   assert.equal(invalidFields(fields('anilist'), {}).length,0)
   assert.ok(invalidFields(fields('douban'), {chart:'custom', url:'javascript:alert(1)'}).some(f=>f.key==='url'))
@@ -81,7 +81,7 @@ test('新增规则重复时保持弹窗并提示，非法数字也不能提交',
   const e=editor('anilist')
   try {
     e.edit(-1);e.save();assert.match(e.error.value,/相同规则/);assert.equal(e.open.value,true)
-    e.draft.value.limit=0;e.save();assert.match(e.error.value,/检查/);assert.equal(e.events.length,0)
+    e.draft.value.limit=-1;e.save();assert.match(e.error.value,/检查/);assert.equal(e.events.length,0)
   } finally {e.dispose()}
 })
 test('规则启停保留设置，逐个移除后显式保存为空数组',()=>{

@@ -59,7 +59,7 @@ test('旧字段移除、类型或默认值变化拒绝静默忽略；新增可�
   assert.throws(()=>inspect(exported(),'applemusic',{fields:[...settings.fields,{...extra,required:true}]}),errorCode('missingFields'))
 })
 test('值与当前选项、范围、条件字段同步校验，保留原规则不被修改',()=>{
-  for(const [field,value] of [['country','xx'],['chart','invalid'],['limit',0],['limit',101],['limit',true],['on','false'],['name','x'.repeat(81)],['limit',null]]){
+  for(const [field,value] of [['country','xx'],['chart','invalid'],['limit',-1],['limit',1.5],['limit',true],['on','false'],['name','x'.repeat(81)],['limit',null]]){
     const p=exported();p.rules[0][field]=value
     assert.throws(()=>inspect(p),errorCode('invalidRule'))
   }

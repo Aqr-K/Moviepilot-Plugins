@@ -15,15 +15,17 @@ class OverviewApiMixin:
         for provider in self._providers:
             spec = provider.get_spec()
             pconf = ProviderConfig(self._settings.provider_raw(spec.provider_id), spec)
+            configuration_error = getattr(self, "_configuration_errors", {}).get(spec.provider_id, "")
             providers.append(
                 {
                     "provider_id": spec.provider_id,
                     "provider_name": localize_provider_name(
                         spec.provider_id, spec.provider_name, lang
                     ),
-                    "enabled": pconf.enabled,
+                    "enabled": pconf.enabled and not configuration_error,
                     "notify": pconf.notify,
                     "cron": pconf.cron,
+                    "configuration_error": configuration_error,
                 }
             )
         with self._run_lock:
