@@ -2,7 +2,7 @@
 
 统一聚合 **豆瓣、猫眼、热门媒体、Mikan、奈飞、AniList、Spotify、苹果音乐、网易云音乐、腾讯音乐** 十类来源，按你的规则组合过滤后**自动订阅**的 MoviePilot 插件。每个来源可单独开关、单独定时、单独手动运行，所有来源共用一套「识别 → 查重 → 订阅 → 记历史」落地管线，按媒体身份、季号和成功历史防止重复订阅。
 
-本插件后续仅维护、测试和发布 **MoviePilot v3** 版本；v2 保留历史版本。当前插件版本为 **3.4.0**。发布文案见[3.4.0 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.0.md)。原生管理菜单需要主程序前端同步提供对应宿主入口。
+本插件后续仅维护、测试和发布 **MoviePilot v3** 版本；v2 保留历史版本。当前插件版本为 **3.4.1**。发布文案见[3.4.1 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.1.md)。原生管理菜单需要主程序前端同步提供对应宿主入口。
 
 ---
 
@@ -357,4 +357,4 @@
 - 黑名单说明：[`../../docs/automatic-subscription-assistant-blacklist.md`](../../docs/automatic-subscription-assistant-blacklist.md)
 - 历史审查修复记录：[`../../docs/automatic-subscription-assistant-fixes-2026-10-24.md`](../../docs/automatic-subscription-assistant-fixes-2026-10-24.md)
 
-版本更新说明见[3.4.0 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.0.md)。
+版本更新说明见[3.4.1 发布说明](../../docs/releases/AutomaticSubscriptionAssistant/v3.4.1.md)。

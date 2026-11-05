@@ -25,6 +25,7 @@
           class="asa-cfg-head__save"
           color="primary"
           :loading="saving"
+          :disabled="loading || configurationBlocked"
           variant="flat"
           @click="saveConfig"
         >
@@ -508,6 +509,9 @@ const PROVIDER_ICONS = {
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
+const configurationBlocked = ref(true)
+let configLoadPromise = null
+let configurationLoaded = false
 const providerSpecs = ref([])
 const activeGroup = ref(GLOBAL_KEY)
 const running = reactive({})
@@ -663,6 +667,7 @@ function isProviderEnabled(pid) { return !!(config.providers[pid] && config.prov
 
 function ensureProviderConfig(spec) {
   const pid = spec.provider_id
+  const existed = !!config.providers[pid]
   if (!config.providers[pid] || typeof config.providers[pid] !== 'object') config.providers[pid] = {}
   const pc = config.providers[pid]
   if (typeof pc.enabled !== 'boolean') pc.enabled = false
@@ -671,21 +676,11 @@ function ensureProviderConfig(spec) {
   if (!pc.options || typeof pc.options !== 'object') pc.options = {}
   if (!pc.filters || typeof pc.filters !== 'object') pc.filters = {}
   const ruleField = (spec.options_schema || []).find(f => f.kind === 'rule-list')
-  const optionKeys = new Set((spec.options_schema || []).map(f => f.key))
-  if (ruleField && pc.options[ruleField.key] === undefined &&
-      (Object.keys(pc.options).some(key => !optionKeys.has(key)) || Object.keys(pc.filters).length)) {
-    pc.options[ruleField.key] = []
+  if (existed && ruleField && pc.options[ruleField.key] === undefined) {
+    throw new Error(`${spec.provider_name || pid}：旧配置尚未完成自动迁移，请检查后端升级状态`)
   }
-  pc.options = Object.fromEntries((spec.options_schema || []).map(f => [f.key, pc.options[f.key] === undefined ? deepClone(f.default) : pc.options[f.key]]))
-  pc.filters = Object.fromEntries((spec.filters_schema || []).map(f => [f.key, pc.filters[f.key] === undefined ? deepClone(f.default) : pc.filters[f.key]]))
-}
-
-function inferProvidersFromConfig() {
-  return Object.keys(config.providers || {}).map(pid => ({
-    provider_id: pid, provider_name: pid,
-    default_cron: (config.providers[pid] && config.providers[pid].cron) || '',
-    options_schema: [], filters_schema: [],
-  }))
+  pc.options = { ...pc.options, ...Object.fromEntries((spec.options_schema || []).map(f => [f.key, pc.options[f.key] === undefined ? deepClone(f.default) : pc.options[f.key]])) }
+  pc.filters = { ...pc.filters, ...Object.fromEntries((spec.filters_schema || []).map(f => [f.key, pc.filters[f.key] === undefined ? deepClone(f.default) : pc.filters[f.key]])) }
 }
 
 async function loadProviders() {
@@ -693,18 +688,31 @@ async function loadProviders() {
   error.value = ''
   try {
     if (!props.api || typeof props.api.get !== 'function') throw new Error(t('apiUnavailable'))
+    // 宿主传入的 initialConfig 可能早于插件启动迁移；只在首次载入时读取后端的已升级配置。
+    // 语言切换复用该请求，避免覆盖用户尚未保存的编辑。
+    if (!configLoadPromise) configLoadPromise = (async () => {
+      const response = await props.api.get(`${PLUGIN}/config`)
+      if (response?.code || !response?.config || typeof response.config !== 'object') {
+        throw new Error(response?.message || '无法读取升级后的配置，已阻止保存')
+      }
+      config.global = { ...config.global, ...deepClone(response.config.global || {}) }
+      config.providers = deepClone(response.config.providers || {})
+      configurationLoaded = true
+    })()
+    await configLoadPromise
     const res = await props.api.get(`${PLUGIN}/providers?lang=${encodeURIComponent(locale.value)}`)
     if (Array.isArray(res)) providerSpecs.value = res
     else if (res && Array.isArray(res.providers)) providerSpecs.value = res.providers
     else providerSpecs.value = []
+    if (!providerSpecs.value.length) throw new Error(t('providersError'))
+    providerSpecs.value.forEach(ensureProviderConfig)
+    configurationBlocked.value = false
+    if (!snapshot.value) snapshot.value = flatten(config)
   } catch (e) {
     error.value = t('providersError') + (e?.message || e)
-    providerSpecs.value = inferProvidersFromConfig()
+    configurationBlocked.value = true
+    if (!configurationLoaded) configLoadPromise = null
   }
-  if (!providerSpecs.value.length) providerSpecs.value = inferProvidersFromConfig()
-  providerSpecs.value.forEach(ensureProviderConfig)
-  // 结构补全完成后拍快照作为脏值基线（仅首次，避免语言切换刷新时误清改动计数）
-  if (!snapshot.value) snapshot.value = flatten(config)
   loading.value = false
 }
 
@@ -795,6 +803,7 @@ const cronErrors = computed(() => Object.entries(config.providers || {})
   }))
 
 function saveConfig() {
+  if (loading.value || configurationBlocked.value) return
   if (cronErrors.value.length) {
     error.value = `${t('cronInvalid')}：${cronErrors.value.join('、')}`
     return

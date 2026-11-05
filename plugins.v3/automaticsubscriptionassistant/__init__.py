@@ -75,7 +75,7 @@ class AutomaticSubscriptionAssistant(
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Aqr-K/MoviePilot-Plugins/main/icons/Auto_Subscribe_Assistant.png"
     # 插件版本
-    plugin_version = "3.4.0"
+    plugin_version = "3.4.1"
     # 插件作者
     plugin_author = "Aqr-K"
     # 作者主页
@@ -92,6 +92,7 @@ class AutomaticSubscriptionAssistant(
         # 运行期状态（真正的赋值在 init_plugin 中完成）。
         self._database_ready = False
         self._database_error = "数据库尚未初始化"
+        self._configuration_error = ""
         self._enabled: bool = False
         self._config: Dict[str, Any] = {}
         self._settings: PluginSettings = PluginSettings({})
@@ -127,12 +128,25 @@ class AutomaticSubscriptionAssistant(
         # stop_service 会 set 退出信号，此处重置以便本轮任务正常运行。
         self._event = Event()
 
+        self._configuration_error = ""
+        self._database_error = ""
+        try:
+            self._config = self._upgrade_config(self._config)
+            self._settings = PluginSettings(self._config)
+        except Exception as exc:  # noqa: BLE001 - 备份/转换/写入失败时保留旧配置并停止执行
+            self._configuration_error = f"配置自动迁移失败，自动任务已停止，原配置已保留：{exc}"
+            self._database_error = self._configuration_error
+            self._event.set()
+            logger.error(f"{self.plugin_name}：{self._configuration_error}")
+            return
+
+        gcfg = self._settings.global_config
+
         onlyonce = gcfg.onlyonce
         clear = gcfg.clear
 
         # 宿主在 init_plugin 之后才运行迁移；读取去重/忽略规则前必须先准备好库。
         self._database_ready = False
-        self._database_error = ""
         try:
             with BLACKLIST_LOCK:
                 handle = self.get_database()
