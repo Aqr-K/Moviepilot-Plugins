@@ -175,6 +175,11 @@ class ProviderConfig(TypedConfigAccess):
         """定时表达式，默认取 spec.default_cron。"""
         return self.get_str("cron", self.spec.default_cron)
 
+    @property
+    def subscription(self) -> dict | None:
+        """按媒体类型设置的来源默认订阅规则；返回独立快照。"""
+        return deepcopy(self._raw.get("subscription"))
+
     def option(self, key: str) -> Any:
         """读取某个 option，带 spec 默认值回退。"""
         spec_field = self._options_specs.get(key)
@@ -229,6 +234,7 @@ def build_defaults(specs: list[ProviderSpec]) -> dict:
         defaults["providers"][spec.provider_id] = {
             "enabled": False,
             "notify": False,
+            "subscription": {"enabled": False, "configs": {}},
             "cron": spec.default_cron,
             "options": options,
             "filters": filters,

@@ -137,13 +137,18 @@ class FilterChain:
         for match in matches:
             filters = match.get('filters') or {}
             # 同一条规则必须同时通过 pre/post，不能把两条规则各自通过的一半拼接。
-            verdict = self._run_stage('pre', item, mediainfo, filters)
-            if verdict.accepted and stage == 'post':
-                verdict = self._run_stage('post', item, mediainfo, filters)
+            verdict = self.run_rule(stage, item, mediainfo, filters)
             if verdict.accepted:
                 return verdict
             rejected.append(verdict)
         return rejected[0] if rejected else global_verdict
+
+    def run_rule(self, stage, item, mediainfo, config) -> FilterVerdict:
+        """只检查指定规则；post 阶段同时确认此规则通过 pre 筛选。"""
+        verdict = self._run_stage('pre', item, mediainfo, config)
+        if verdict.accepted and stage == 'post':
+            verdict = self._run_stage('post', item, mediainfo, config)
+        return verdict
 
     def _run_stage(self, stage, item, mediainfo, config):
         for f in self._filters:

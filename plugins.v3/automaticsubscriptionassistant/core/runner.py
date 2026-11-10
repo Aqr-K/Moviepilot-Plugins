@@ -32,6 +32,7 @@ class ProviderRunner:
         """执行单源，返回各状态计数统计（按 SubscribeStatus.value 累加）。"""
         stats: Dict[str, int] = {}
         spec = provider.get_spec()
+        self.executor.source_subscription = provider_config.subscription
         filter_chain = build_filter_chain(list(dict.fromkeys([f.key for f in spec.filters_schema] + ["year", "vote", "media_type", "popularity"])))
 
         filters_config = {f.key:provider_config.filter(f.key) for f in spec.filters_schema}

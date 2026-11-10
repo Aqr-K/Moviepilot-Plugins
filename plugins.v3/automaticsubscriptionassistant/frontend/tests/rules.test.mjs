@@ -54,13 +54,14 @@ test('腾讯采用官方分组，网易云提供分类，Spotify 保留两种全
 
 import * as Vue from 'vue'
 import * as RuleUtils from '../src/utils/rules.js'
+import { normalizeSubscriptionPolicy } from '../src/utils/subscriptionPolicy.js'
 function editor(id, initial) {
   const source=fs.readFileSync(new URL('../src/components/RuleCards.vue',import.meta.url),'utf8')
   const script=source.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*$/mg,'')
   const field=specs.find(s=>s.provider_id===id).options_schema[0]
   const props=Vue.reactive({field,modelValue:JSON.parse(JSON.stringify(initial ?? field.default))})
   const events=[]
-  const env={computed:Vue.computed,ref:Vue.ref,watch:Vue.watch,...RuleUtils,getCurrentInstance:()=>null,defineProps:()=>props,defineEmits:()=>((name,value)=>{events.push([name,value]);props.modelValue=value})}
+  const env={computed:Vue.computed,ref:Vue.ref,watch:Vue.watch,...RuleUtils,normalizeSubscriptionPolicy,getCurrentInstance:()=>null,defineProps:()=>props,defineEmits:()=>((name,value)=>{events.push([name,value]);props.modelValue=value})}
   const scope=Vue.effectScope()
   const result=scope.run(()=>Function(...Object.keys(env),`${script};return {edit,save,toggle,remove,draft,open,error,updateField,rows,openManager,applyRules,managerOpen,workingRows,managerError,search,filteredRows}`)(...Object.values(env)))
   result.openManager()
@@ -157,5 +158,22 @@ test('搜索规则后编辑和移除仍作用于原规则，应用前不改来�
     assert.equal(e.props.modelValue.length,2)
     e.applyRules()
     assert.equal(e.props.modelValue[0].name,'正在流行')
+  } finally {e.dispose()}
+})
+
+test('规则订阅设置仅在两级弹窗应用后保存，取消保留原配置',()=>{
+  const e=editor('anilist')
+  try {
+    e.edit(0)
+    e.draft.value.subscription={enabled:true,configs:{'电影':{quality:'4K'},'电视剧':{best_version:0}}}
+    e.save()
+    assert.equal(e.props.modelValue[0].subscription,undefined)
+    e.applyRules()
+    assert.equal(e.props.modelValue[0].subscription.configs['电影'].quality,'4K')
+    e.openManager();e.edit(0);e.draft.value.subscription.enabled=false
+    e.open.value=false;e.applyRules()
+    assert.equal(e.props.modelValue[0].subscription.enabled,true)
+    e.openManager();e.edit(0);e.draft.value.subscription.configs['电影'].show_edit_dialog=true
+    e.save();assert.ok(e.error.value);assert.equal(e.open.value,true)
   } finally {e.dispose()}
 })

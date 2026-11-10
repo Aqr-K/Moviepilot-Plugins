@@ -222,15 +222,22 @@
                     <p v-if="field.hint">{{ field.hint }}</p>
                   </div>
                   <div class="asa-row__control">
-                    <dynamic-field :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].options[field.key]" />
+                    <dynamic-field :api="api" :provider-id="activeGroup" :provider-name="activeSpec?.provider_name || ''" :field="field" v-model="config.providers[activeGroup].options[field.key]" />
                   </div>
                 </div>
               </div>
             </section>
 
+            <section class="asa-section asa-section--subscription">
+              <h3>{{ normalOptions(activeSpec).length ? 3 : 2 }}. {{ t('secDefaults') }}</h3>
+              <div class="asa-section__rows">
+                <SubscriptionPolicy :key="`subscription-${activeGroup}`" :provider-id="activeGroup" :api="api" v-model="config.providers[activeGroup].subscription" />
+              </div>
+            </section>
+
             <!-- 过滤条件 -->
             <section v-if="normalFilters(activeSpec).length" class="asa-section">
-              <h3>{{ normalOptions(activeSpec).length ? 3 : 2 }}. {{ t('secFilters') }}</h3>
+              <h3>{{ normalOptions(activeSpec).length ? 4 : 3 }}. {{ t('secFilters') }}</h3>
               <div class="asa-section__rows">
                 <div v-for="field in normalFilters(activeSpec)" :key="field.key" :class="rowClass(field)">
                   <div class="asa-row__copy">
@@ -407,12 +414,13 @@ import DynamicField from './DynamicField.vue'
 import ProviderLogo from './ProviderLogo.vue'
 import PluginTabs from './PluginTabs.vue'
 import Page from './Page.vue'
+import SubscriptionPolicy from './SubscriptionPolicy.vue'
 
 const HELP_URL = 'https://github.com/Aqr-K/MoviePilot-Plugins/blob/main/plugins.v3/automaticsubscriptionassistant/README.md'
 
 const props = defineProps({
   initialConfig: { type: Object, default: () => ({}) },
-  api: { type: Object, default: () => ({}) },
+  api: { type: [Object, Function], default: () => ({}) },
 })
 const emit = defineEmits(['save', 'close', 'switch', 'layout'])
 emit('layout', { maxWidth: '72rem' })
@@ -439,7 +447,7 @@ const MSG = {
     secSourceSchedule: '来源与调度', enableSource: '启用该来源', enableSourceHint: '关闭后不为该来源注册定时任务',
     cronLabel: '定时规则', cronHint: '五位 cron 表达式，缺省取来源默认值',
     cronInvalid: '定时表达式格式不正确，应为五段',
-    secOptions: '抓取选项', secFilters: '过滤条件', advanced: '高级选项', advancedHint: '默认隐藏，谨慎修改',
+    secDefaults: '默认设置', secOptions: '抓取选项', secFilters: '过滤条件', advanced: '高级选项', advancedHint: '默认隐藏，谨慎修改',
     runNow: '立即运行一次', runTriggered: '已触发，将在 3 秒后运行', runFailed: '触发失败：', apiUnavailable: 'API 不可用',
     testConn: '连通性测试', testOk: '连通正常', testFail: '连通失败：', throttled: '操作过于频繁，请稍后再试',
     overview: '概览', ovSources: '启用来源', ovNotify: '通知来源', ovExistOk: '已存在仍订阅', on: '开', off: '关',
@@ -467,7 +475,7 @@ const MSG = {
     secSourceSchedule: '來源與排程', enableSource: '啟用此來源', enableSourceHint: '關閉後不為此來源註冊定時任務',
     cronLabel: '定時規則', cronHint: '五位 cron 運算式，缺省取來源預設值',
     cronInvalid: '定時運算式格式不正確，應為五段',
-    secOptions: '抓取選項', secFilters: '過濾條件', advanced: '進階選項', advancedHint: '預設隱藏，謹慎修改',
+    secDefaults: '預設設定', secOptions: '抓取選項', secFilters: '過濾條件', advanced: '進階選項', advancedHint: '預設隱藏，謹慎修改',
     runNow: '立即執行一次', runTriggered: '已觸發，將在 3 秒後執行', runFailed: '觸發失敗：', apiUnavailable: 'API 不可用',
     testConn: '連通性測試', testOk: '連通正常', testFail: '連通失敗：', throttled: '操作過於頻繁，請稍後再試',
     overview: '概覽', ovSources: '啟用來源', ovNotify: '通知來源', ovExistOk: '已存在仍訂閱', on: '開', off: '關',
@@ -495,7 +503,7 @@ const MSG = {
     secSourceSchedule: 'Source & schedule', enableSource: 'Enable this source', enableSourceHint: 'Off: no scheduled task is registered for this source',
     cronLabel: 'Schedule', cronHint: 'Five-field cron expression; empty uses the source default',
     cronInvalid: 'Invalid cron expression; five fields are required',
-    secOptions: 'Fetch options', secFilters: 'Filters', advanced: 'Advanced', advancedHint: 'Hidden by default; edit with care',
+    secDefaults: 'Default settings', secOptions: 'Fetch options', secFilters: 'Filters', advanced: 'Advanced', advancedHint: 'Hidden by default; edit with care',
     runNow: 'Run once now', runTriggered: 'Triggered; will run in 3s', runFailed: 'Trigger failed: ', apiUnavailable: 'API unavailable',
     testConn: 'Test connection', testOk: 'Connected', testFail: 'Connection failed: ', throttled: 'Too frequent, please retry later',
     overview: 'Overview', ovSources: 'Enabled sources', ovNotify: 'Sources with notifications', ovExistOk: 'Subscribe if exists', on: 'On', off: 'Off',
@@ -719,6 +727,7 @@ function ensureProviderConfig(spec) {
   }
   if (!config.providers[pid] || typeof config.providers[pid] !== 'object') config.providers[pid] = {}
   const pc = config.providers[pid]
+  if (pc.subscription == null) pc.subscription = { enabled: false, configs: {} }
   if (typeof pc.enabled !== 'boolean') pc.enabled = false
   if (typeof pc.notify !== 'boolean') pc.notify = false
   if (!pc.cron) pc.cron = spec.default_cron || ''
@@ -729,7 +738,7 @@ function ensureProviderConfig(spec) {
 }
 
 function defaultProvider(spec) {
-  return { enabled: false, notify: false, cron: spec.default_cron || '',
+  return { enabled: false, notify: false, subscription: { enabled: false, configs: {} }, cron: spec.default_cron || '',
     options: Object.fromEntries((spec.options_schema || []).map(f => [f.key, deepClone(f.default)])),
     filters: Object.fromEntries((spec.filters_schema || []).map(f => [f.key, deepClone(f.default)])) }
 }

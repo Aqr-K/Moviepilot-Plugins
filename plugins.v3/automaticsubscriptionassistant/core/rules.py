@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..schemas import RankMediaItem
     from .provider import ProviderContext
 from .provider import RankProvider
+from .subscription_policy import normalize_subscription_policy
 
 
 def active_field(field: FieldSpec, values: dict[str, Any]) -> bool:
@@ -99,6 +100,7 @@ def normalize_rules(field: FieldSpec, raw: Any) -> list[dict[str, Any]]:
         result.append(
             {
                 **values,
+                **({"subscription": normalize_subscription_policy(entry["subscription"])} if "subscription" in entry else {}),
                 "id": identity,
                 "name": name.strip() or field.label,
                 "on": entry.get("on", True),
@@ -246,6 +248,7 @@ class RuleRankProvider(RankProvider):
                 "id": entry["id"],
                 "name": entry["name"],
                 "filters": filters,
+                **({"subscription": deepcopy(entry["subscription"])} if "subscription" in entry else {}),
             }
             jobs.append((match, lambda values=values: fetch_rule(values)))
         yield from merge_jobs(jobs, context)

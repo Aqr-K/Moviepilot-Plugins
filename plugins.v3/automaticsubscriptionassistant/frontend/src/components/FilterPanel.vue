@@ -43,6 +43,16 @@
         <p v-if="field.hint" class="fp-hint">{{ field.hint }}</p>
       </div>
 
+      <div v-else-if="field.type === 'combobox'" class="fp-item fp-item--input" :class="{ 'fp-item--wide': field.wide }">
+        <label v-if="stacked" class="fp-label" :for="fid(field.key)">{{ field.label }}</label>
+        <v-combobox :id="fid(field.key)" :model-value="state[field.key]" :aria-label="field.label"
+          class="fp-ctl" :items="field.items || []" item-title="title" item-value="value" :return-object="false"
+          :multiple="!!field.multi" :chips="!!field.multi" :closable-chips="!!field.multi"
+          :loading="field.loading" :no-data-text="field.noDataText" :clearable="field.clearable !== false" density="compact" variant="outlined" hide-details
+          @update:model-value="v => set(field.key, normalize(v, field), field)" />
+        <p v-if="field.hint" class="fp-hint">{{ field.hint }}</p>
+      </div>
+
       <!-- 发行年份范围 -->
       <div v-else-if="field.type === 'year-range'" class="fp-item fp-item--year">
         <label v-if="stacked" class="fp-label" :for="fid(field.keyMin)">{{ field.label }}</label>
