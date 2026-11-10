@@ -24,6 +24,7 @@
                 <v-btn class="asa-rule__remove" :aria-label="`${t('remove')} ${row.name || t('rule')}`" icon="mdi-close" size="x-small" variant="text" @click="remove(index)" />
               </div>
               <p class="asa-rule__summary">{{ ruleSummary(fields, row) }}</p>
+              <p v-if="row.subscription?.enabled" class="asa-rule__summary">{{ t('subscriptionOverride') }}</p>
             </article>
           </div>
           <div class="asa-rules__toolbar">
@@ -74,6 +75,7 @@
               </div>
             </v-expansion-panel-text></v-expansion-panel>
           </v-expansion-panels>
+          <SubscriptionPolicy class="mt-4" :provider-id="providerId" :api="api" :rule="draft" rule-level v-model="draft.subscription" />
           <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-3">{{ error }}</v-alert>
         </v-card-text>
         <v-card-actions><v-spacer /><v-btn variant="text" @click="open = false">{{ t('cancel') }}</v-btn><v-btn color="primary" variant="flat" @click="save">{{ t('save') }}</v-btn></v-card-actions>
@@ -84,14 +86,16 @@
 <script setup>
 import { computed, getCurrentInstance, ref, watch } from 'vue'
 import RuleTransferDialog from './RuleTransferDialog.vue'
+import SubscriptionPolicy from './SubscriptionPolicy.vue'
+import { normalizeSubscriptionPolicy } from '../utils/subscriptionPolicy.js'
 import { createRuleId, fieldOptions, invalidFields, ruleSignature, ruleSummary, ruleValues, visibleField } from '../utils/rules.js'
-const props = defineProps({ providerId: { type: String, required: true }, providerName: { type: String, default: '' }, field: { type: Object, required: true }, modelValue: { default: null } })
+const props = defineProps({ api: { type: [Object, Function], default: () => ({}) }, providerId: { type: String, required: true }, providerName: { type: String, default: '' }, field: { type: Object, required: true }, modelValue: { default: null } })
 const emit = defineEmits(['update:modelValue'])
 const inst = getCurrentInstance()
 const messages = {
-  'zh-CN': { import:'导入', share:'分享', search:'搜索规则', noResults:'没有匹配的规则', manage:'配置规则', count:'{n} 条，启用 {enabled} 条', apply:'应用', clear:'清空规则', conflict:'来源配置已变更，请重新打开规则配置。', add:'添加规则', rule:'规则', edit:'编辑规则', remove:'移除', enable:'启用', presets:'使用预设', empty:'暂无规则，该来源不会运行。', name:'规则名称', nameHint:'留空时自动生成名称', advanced:'高级筛选', group:'榜单分组', cancel:'取消', save:'保存', invalid:'请检查规则条件', duplicate:'已有相同规则，请编辑已有卡片。', max:'最多添加 100 条规则', fieldInvalid:'请填写有效值' },
-  'zh-TW': { import:'匯入', share:'分享', search:'搜尋規則', noResults:'沒有符合的規則', manage:'設定規則', count:'{n} 條，啟用 {enabled} 條', apply:'套用', clear:'清空規則', conflict:'來源設定已變更，請重新開啟規則設定。', add:'新增規則', rule:'規則', edit:'編輯規則', remove:'移除', enable:'啟用', presets:'使用預設', empty:'尚無規則，此來源不會執行。', name:'規則名稱', nameHint:'留空時自動產生名稱', advanced:'進階篩選', group:'榜單分組', cancel:'取消', save:'儲存', invalid:'請檢查規則條件', duplicate:'已有相同規則，請編輯已有卡片。', max:'最多新增 100 條規則', fieldInvalid:'請填寫有效值' },
-  'en-US': { import:'Import', share:'Share', search:'Search rules', noResults:'No matching rules', manage:'Configure rules', count:'{n} rules, {enabled} enabled', apply:'Apply', clear:'Clear rules', conflict:'Source settings changed. Reopen the rules dialog.', add:'Add rule', rule:'Rule', edit:'Edit rule', remove:'Remove', enable:'Enable', presets:'Presets', empty:'No rules. This source will not run.', name:'Rule name', nameHint:'Leave blank to generate a name', advanced:'Advanced filters', group:'Chart group', cancel:'Cancel', save:'Save', invalid:'Check the rule conditions', duplicate:'This rule already exists. Edit its card.', max:'Up to 100 rules', fieldInvalid:'Enter a valid value' },
+  'zh-CN': { subscriptionOverride:'已启用规则级订阅设置', import:'导入', share:'分享', search:'搜索规则', noResults:'没有匹配的规则', manage:'配置规则', count:'{n} 条，启用 {enabled} 条', apply:'应用', clear:'清空规则', conflict:'来源配置已变更，请重新打开规则配置。', add:'添加规则', rule:'规则', edit:'编辑规则', remove:'移除', enable:'启用', presets:'使用预设', empty:'暂无规则，该来源不会运行。', name:'规则名称', nameHint:'留空时自动生成名称', advanced:'高级筛选', group:'榜单分组', cancel:'取消', save:'保存', invalid:'请检查规则条件', duplicate:'已有相同规则，请编辑已有卡片。', max:'最多添加 100 条规则', fieldInvalid:'请填写有效值' },
+  'zh-TW': { subscriptionOverride:'已啟用規則級訂閱設定', import:'匯入', share:'分享', search:'搜尋規則', noResults:'沒有符合的規則', manage:'設定規則', count:'{n} 條，啟用 {enabled} 條', apply:'套用', clear:'清空規則', conflict:'來源設定已變更，請重新開啟規則設定。', add:'新增規則', rule:'規則', edit:'編輯規則', remove:'移除', enable:'啟用', presets:'使用預設', empty:'尚無規則，此來源不會執行。', name:'規則名稱', nameHint:'留空時自動產生名稱', advanced:'進階篩選', group:'榜單分組', cancel:'取消', save:'儲存', invalid:'請檢查規則條件', duplicate:'已有相同規則，請編輯已有卡片。', max:'最多新增 100 條規則', fieldInvalid:'請填寫有效值' },
+  'en-US': { subscriptionOverride:'Rule subscription override enabled', import:'Import', share:'Share', search:'Search rules', noResults:'No matching rules', manage:'Configure rules', count:'{n} rules, {enabled} enabled', apply:'Apply', clear:'Clear rules', conflict:'Source settings changed. Reopen the rules dialog.', add:'Add rule', rule:'Rule', edit:'Edit rule', remove:'Remove', enable:'Enable', presets:'Presets', empty:'No rules. This source will not run.', name:'Rule name', nameHint:'Leave blank to generate a name', advanced:'Advanced filters', group:'Chart group', cancel:'Cancel', save:'Save', invalid:'Check the rule conditions', duplicate:'This rule already exists. Edit its card.', max:'Up to 100 rules', fieldInvalid:'Enter a valid value' },
 }
 const locale = computed(() => {
   const raw = inst?.appContext?.config?.globalProperties?.$i18n?.locale
@@ -131,6 +135,8 @@ function applyRules() {
   const signatures = new Set()
   for (const row of rows.value) {
     if (invalidFields(fields.value, row).length) { managerError.value = t('invalid'); return }
+    try { if (row.subscription != null) normalizeSubscriptionPolicy(row.subscription) }
+    catch (exc) { managerError.value = exc.message; return }
     const signature = ruleSignature(fields.value, row)
     if (signatures.has(signature)) { managerError.value = t('duplicate'); return }
     signatures.add(signature)
@@ -171,7 +177,10 @@ function save() {
   if (editing.value < 0 && rows.value.length >= 100) { error.value = t('max'); return }
   const first = fields.value.find(f => ['chart', 'category', 'dataset', 'sort', 'time'].includes(f.key))
   const automatic = first ? fieldOptions(first, draft.value).find(o => o.value === draft.value[first.key])?.title : null
-  const rule = { ...ruleValues(fields.value, draft.value), on:draft.value.on !== false, name:String(draft.value.name || '').trim() || automatic || t('rule'), id:draft.value.id || createRuleId() }
+  let subscription
+  try { if (draft.value.subscription != null) subscription = normalizeSubscriptionPolicy(draft.value.subscription) }
+  catch (exc) { error.value = exc.message; return }
+  const rule = { ...ruleValues(fields.value, draft.value), ...(subscription ? { subscription } : {}), on:draft.value.on !== false, name:String(draft.value.name || '').trim() || automatic || t('rule'), id:draft.value.id || createRuleId() }
   const next = rows.value.slice()
   if (editing.value < 0) next.push(rule); else next[editing.value] = rule
   workingRows.value = next; open.value = false

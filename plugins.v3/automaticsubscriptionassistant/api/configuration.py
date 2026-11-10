@@ -11,6 +11,7 @@ from app.sdk.logging import logger
 
 from ..core.config import build_defaults
 from ..core.config_migration import backup_config, migrate_config
+from ..core.subscription_policy import normalize_subscription_policy
 
 
 class ConfigurationApiMixin:
@@ -31,6 +32,8 @@ class ConfigurationApiMixin:
                     {"providers": {pid: config["providers"][pid]}}, [provider]
                 )
                 source = result["providers"][pid]
+                if "subscription" in source:
+                    source["subscription"] = normalize_subscription_policy(source["subscription"])
                 provider.validate_options(source.get("options", {}))
                 migrated["providers"][pid] = source
                 changed.extend(updated)
@@ -124,6 +127,8 @@ class ConfigurationApiMixin:
                 ):
                     raise TypeError("来源选项必须为对象")
                 validate = getattr(provider, "validate_options", None)
+                if "subscription" in raw:
+                    raw["subscription"] = normalize_subscription_policy(raw["subscription"])
                 if validate:
                     validate(raw.get("options", {}))
             if preserved:

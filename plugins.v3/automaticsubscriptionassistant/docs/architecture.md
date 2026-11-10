@@ -10,6 +10,7 @@
 | `core/provider.py`、`core/registry.py` | 定义 `RankProvider`、运行上下文 `ProviderContext`，注册并创建来源 |
 | `providers/*.py` | 抓取并解析十类来源，产出 `RankMediaItem`，声明配置与过滤字段 |
 | `core/rules.py`、`providers/rule_specs.py` | 独立规则契约、请求转换、候选合并与命中轨迹 |
+| `core/subscription_policy.py` | 来源与规则订阅设置白名单、媒体类型校验与优先级选择 |
 | `core/config.py` | 类型转换、全局与来源配置访问、按 `ProviderSpec` 生成默认值 |
 | `core/filters.py` | 组合 pre/post 过滤链，返回接受或拒绝的原因 |
 | `core/dedup.py` | 从宿主活动订阅建立 `SubscribedIndex`，按身份、类型、季号和剧集组快速去重 |
@@ -95,6 +96,18 @@ flowchart TD
 所有结果参与本轮统计。普通处理分支会写入或合并历史；`already_handled` 不写新历史，活动索引短路也会避免重复写已处理记录。单条异常不会中断整个来源。
 
 `get_no_exists_info()` 返回 `True` 表示媒体库完整存在，只有 `exist_ok=False` 时才因此跳过订阅。完整存在的判定仍由宿主负责。
+
+## 自动订阅设置
+
+来源默认规则存于 `providers.<id>.subscription`；规则覆盖存于 `options.rules[].subscription`。格式为 `{enabled: bool, configs: {电影|电视剧|音乐: options}}`。没有配置的旧来源与旧规则不自动启用；旧榜单配置升级保留来源级字段。配置备份、来源异常隔离和还原默认配置沿用统一生命周期，不引入数据库表或迁移。
+
+自动执行器根据识别后的类型选择设置：按命中顺序选择首条同时通过 pre/post 筛选、启用了覆盖且包含对应媒体类型的规则，否则读取来源默认值，再否则传空参数交给宿主默认行为。单个媒体类型的设置整体替换来源值，不逐字段合并；显式空对象表示只用宿主默认值，缺失类型表示继续上级兜底。前端清空类型后应用会移除类型键。手动补充编辑不读取自动设置。
+
+`normalize_subscription_policy` 用独立字段白名单和公开 `Subscribe` 模型校验参数，保留显式 `0/False`。禁止覆盖媒体身份、季号、用户名、总集数与 `show_edit_dialog`。榜单签名只计算榜单条件，订阅设置不影响候选去重。合并命中轨迹携带独立设置快照，规则分享/导入也保留并校验此字段。
+
+前端 `SubscriptionPolicy.vue` 使用插件内表单和独立草稿，取消不回写；应用时复核外部配置未变化。SDK 仅用于读取规则组和目录选项，站点和下载器通过宿主公开 HTTP 接口读取；SDK 失败时目录和规则组也回退至宿主表单使用的 `download/paths`、`rule/groups` 接口；所有选项请求失败均可退回手动输入，关闭/卸载后忽略迟到结果。影视/音乐规格预设的值与主程序 `api/constants.ts` 一致，目录合并别名但始终提交下载路径。来源级入口置于独立的「默认设置」区块，表单复用插件紧凑控件并折叠高级项。未调用宿主默认订阅编辑弹窗，不读写 `system/setting/Default*SubscribeConfig`。
+
+空文本、空列表和 IMDb 关闭值的最终行为由宿主创建链决定；影视 UI 仅提供 IMDb 跟随/开启，避免承诺宿主尚不支持的强制关闭。主程序的后续字段变更须同时更新前后端白名单和对应测试。
 
 ## 媒体身份与季号
 

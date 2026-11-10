@@ -1,5 +1,6 @@
 /** 来源规则的可移植格式及导入校验；不包含代理、通知或来源调度配置。 */
 import { createRuleId, invalidFields, ruleSignature, ruleValues, visibleField } from './rules.js'
+import { normalizeSubscriptionPolicy } from './subscriptionPolicy.js'
 
 export const RULE_SHARE_FORMAT = 'moviepilot.automatic-subscription-assistant.rules'
 export const RULE_SHARE_VERSION = 1
@@ -34,7 +35,7 @@ function sorted(value) {
 const equal = (a, b) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b))
 function checkedRule(fields, row, index, warnings, { imported = false } = {}) {
   if (!record(row) || typeof row.on !== 'boolean' && row.on !== undefined || typeof row.name !== 'string' || row.name.length > 80) fail('invalidRule', { index: index + 1 })
-  const allowed = new Set(['id', 'name', 'on', ...fields.map(f => f.key)])
+  const allowed = new Set(['id', 'name', 'on', 'subscription', ...fields.map(f => f.key)])
   const unknown = Object.keys(row).filter(key => !allowed.has(key))
   if (unknown.length) fail('unknownFields', { index: index + 1, fields: unknown.join(', ') })
   const complete = { ...Object.fromEntries(fields.map(f => [f.key, f.default])), ...row }
@@ -45,7 +46,10 @@ function checkedRule(fields, row, index, warnings, { imported = false } = {}) {
     if (missing.length) warnings.push({ code: 'defaultsAdded', details: { index: index + 1, fields: missing.map(f => f.label).join(', ') } })
   }
   if (fields.some(f => Object.hasOwn(row, f.key) && row[f.key] === null) || invalidFields(fields, row).length) fail('invalidRule', { index: index + 1 })
-  return { ...ruleValues(fields, row), name: row.name.trim(), on: row.on !== false, id: imported ? createRuleId() : row.id || createRuleId() }
+  let subscription
+  try { if (row.subscription != null) subscription = normalizeSubscriptionPolicy(row.subscription) }
+  catch { fail('invalidRule', { index: index + 1 }) }
+  return { ...ruleValues(fields, row), ...(subscription ? { subscription } : {}), name: row.name.trim(), on: row.on !== false, id: imported ? createRuleId() : row.id || createRuleId() }
 }
 
 export function serializeRuleShare({ providerId, providerName = '', fields, rules, pluginVersion = PLUGIN_VERSION, now = new Date() }) {

@@ -1,5 +1,5 @@
 <template>
-  <rule-cards v-if="field.kind === 'rule-list'" :key="field.key" :field="field" :provider-id="providerId" :provider-name="providerName" :model-value="modelValue" @update:model-value="emitVal" />
+  <rule-cards v-if="field.kind === 'rule-list'" :key="field.key" :api="api" :field="field" :provider-id="providerId" :provider-name="providerName" :model-value="modelValue" @update:model-value="emitVal" />
   <!-- 开关：紧凑、无内联标签（标签由字段行提供） -->
   <v-switch
     v-else-if="field.kind === 'switch'"
@@ -96,6 +96,7 @@ import { computed, getCurrentInstance } from 'vue'
 import RuleCards from './RuleCards.vue'
 
 const props = defineProps({
+  api: { type: [Object, Function], default: () => ({}) },
   field: { type: Object, required: true },
   providerId: { type: String, default: '' },
   providerName: { type: String, default: '' },

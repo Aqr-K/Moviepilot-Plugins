@@ -290,7 +290,8 @@ export function createMockApi(initialConfig: Record<string, any> = {}): MockApi 
     get(url: string): Promise<unknown> {
       const path = url.split('?')[0]
       const lang = parseQuery(url).lang || 'zh-CN'
-      if (path === 'site/rss') return delay({ success: true, data: [{ id: 1, name: '预览站点' }] })
+      if (path === 'site/rss') return delay({ success: true, data: [{ id: 1, name: '预览站点', is_active: true }] })
+      if (path === 'download/paths') return delay({ success: true, data: [{ name: '预览下载目录', download_path: '/downloads', save_path: '/downloads', storage: 'local' }] })
       if (path === 'download/clients') return delay({ success: true, data: [{ name: '预览下载器' }] })
       if (path === 'rule/groups') return delay({ success: true, data: { rule_groups: [{ name: '预览规则组' }] } })
       if (path.endsWith('/blacklist')) return delay({ code: 0, list: blacklist.slice(), total: blacklist.length })

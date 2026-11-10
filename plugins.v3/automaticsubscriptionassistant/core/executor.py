@@ -22,6 +22,7 @@ from app.sdk.media import MUSIC_MEDIA_SOURCES, MetaMusic, MetaInfo, resolve_medi
 
 from ..services.blacklist import BLACKLIST_LOCK
 from .dedup import SubscribedIndex
+from .subscription_policy import subscription_options
 from ..schemas import HistoryRecord, RankMediaItem, SubscribeOutcome, SubscribeStatus, media_identity
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class SubscribeExecutor:
         self.gcfg = global_config
         self.manual = manual
         self.subscribe_options = dict(subscribe_options or {})
+        self.source_subscription: dict | None = None
         if context.blacklist is None:
             raise ValueError("订阅执行器必须注入当前实例的黑名单服务")
         self.blacklist = context.blacklist
@@ -242,6 +244,9 @@ class SubscribeExecutor:
                     or self.blacklist.match(mediainfo, season=sub_season if is_tv else None)):
                 return self._blocked(item, provider, history, mediainfo,
                                      sub_season if is_tv else None, rid)
+            automatic_options = {} if self.manual else subscription_options(
+                item, mediainfo, filter_chain, self.source_subscription
+            )
             sid, err = self.ctx.subscribechain.add(
                 title=mediainfo.title,
                 year=mediainfo.year,
@@ -253,7 +258,7 @@ class SubscribeExecutor:
                 music_type=getattr(mediainfo, "music_type", None),
                 exist_ok=self.gcfg.exist_ok,
                 username=self.gcfg.username,
-                **self.subscribe_options,
+                **{**automatic_options, **self.subscribe_options},
             )
             if sid:
                 self._record(history, rid, provider, item, mediainfo, sub_season,
